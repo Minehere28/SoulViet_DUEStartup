@@ -1,45 +1,50 @@
-from neo4j import GraphDatabase
-import os
-from neo4j import GraphDatabase
-from dotenv import load_dotenv
-
-load_dotenv()
+import torch
 
 class Neo4jService:
-    def __init__(self):
-        uri = os.getenv("NEO4J_URI")
-        user = os.getenv("NEO4J_USER")
-        password = os.getenv("NEO4J_PASSWORD")
 
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+    def __init__(self):
+        data = torch.load("graph.pt")
+        self.edges = data["edges"]
 
     def close(self):
-        self.driver.close()
+        pass
 
-    #   cluster bằng graph (WCC)
     def get_clusters(self, place_ids):
-        with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (p:Place)
-                WHERE p.id IN $ids
+        visited = set()
+        clusters = []
 
-                CALL {
-                    WITH p
-                    MATCH (p)-[:NEAR*0..]->(connected)
-                    WHERE connected.id IN $ids
-                    RETURN collect(DISTINCT connected) AS cluster
-                }
+        adjacency = {}
+ # fake graph từ cái file pt 
+        for edge in self.edges:
+            src = edge["src"]
+            dst = edge["dst"]
 
-                RETURN cluster
-                """,
-                ids=place_ids
-            )
+            if src not in adjacency:
+                adjacency[src] = []
 
-            clusters = []
-            for record in result:
-                cluster_nodes = record["cluster"]
-                cluster_ids = [node["id"] for node in cluster_nodes]
-                clusters.append(cluster_ids)
+            adjacency[src].append(dst)
 
-            return clusters
+        # BFS 
+        for pid in place_ids:
+            if pid in visited:
+                continue
+
+            stack = [pid]
+            cluster = []
+
+            while stack:
+                cur = stack.pop()
+
+                if cur in visited:
+                    continue
+
+                visited.add(cur)
+                cluster.append(cur)
+
+                for neighbor in adjacency.get(cur, []):
+                    if neighbor in place_ids:
+                        stack.append(neighbor)
+
+            clusters.append(cluster)
+
+        return clusters
