@@ -1,5 +1,4 @@
-import requests
-import json
+from groq import Groq
 import os
 from dotenv import load_dotenv
 
@@ -7,43 +6,39 @@ load_dotenv()
 
 class LLMService:
     def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model_id = "arcee-ai/trinity-large-preview:free"  
-        self.url = "https://openrouter.ai/api/v1/chat/completions"
+        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-    def generate_itinerary_text(self, itinerary_data, user_vibe, weather):
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
- 
+    def generate_itinerary_text(self, itinerary_data, user_vibe, weather="Trời nắng đẹp, không khí trong lành"):
+        # Prompt này copy từ bản test thành công của bạn
         prompt = f"""
-        Bạn là Trinity, trợ lý du lịch của SoulViet.
-        Thời tiết hiện tại: {weather}.
-        Yêu cầu của khách: Thích phong cách {user_vibe}.
-        
-        Đây là danh sách địa điểm đã chọn:
-        {json.dumps(itinerary_data, ensure_ascii=False)}
+Bạn là SoulViet AI – hướng dẫn viên du lịch Việt Nam.
 
-        Hãy viết một bài giới thiệu hành trình cực kỳ lôi cuốn, có tâm. 
-        Mô tả từng ngày nên đi đâu, cảm nhận không khí thế nào. 
-        Lưu ý: Nếu thời tiết xấu, hãy dặn khách chuẩn bị ô hoặc đổi lịch đi cafe.
-        Văn phong: Gần gũi, sành điệu, đậm chất văn hóa Việt Nam.
-        """
+Phong cách: {user_vibe}
+Thời tiết: {weather}
 
-        payload = {
-            "model": self.model_id,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        }
+Dữ liệu:
+{itinerary_data}
 
-        response = requests.post(self.url, headers=headers, data=json.dumps(payload))
-        
-        if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
-        else:
-            return f"Lỗi gọi AI: {response.text}"
+Yêu cầu:
+- Viết hành trình theo từng ngày
+- Có sáng / chiều / tối
+- Văn phong tự nhiên, có cảm xúc
+- Có tip nhỏ
+- Không nói kiểu AI
+"""
+
+        try:
+            completion = self.client.chat.completions.create(
+                model="openai/gpt-oss-120b",  # Dùng đúng model bạn đã test thành công
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,
+                max_completion_tokens=2048,
+                top_p=1,
+                stream=False
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            print("❌ GROQ ERROR:", e)
+            return "AI đang bận, đây là lịch trình mẫu: Ngày 1 đi tham quan các làng nghề truyền thống 🌊"

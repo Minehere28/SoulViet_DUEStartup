@@ -1,27 +1,26 @@
 from fastapi import APIRouter
-from services.data_service import DataService
 from services.itinerary_service import ItineraryService
 from models.user_request import UserRequest
 
 router = APIRouter()
- 
-data_service = DataService("graph.pt")
-places = data_service.load()
-
-itinerary_service = ItineraryService(places)
+itinerary_service = ItineraryService()
 
 @router.post("/plan")
 def plan_trip(request: dict):
-
     user = UserRequest(request)
-
-    clusters = itinerary_service.build(user)
-
-    result = []
-    for i, day in enumerate(clusters):
-        result.append({
-            "day": i + 1,
-            "places": [p.name for p in day]
+    result = itinerary_service.build(user)
+     
+    summary = []
+    for day_data in result["days"]:  
+        summary.append({
+            "day": day_data["day"],
+            "places": [p["name"] for p in day_data["locations"]]  
         })
 
-    return {"itinerary": result}
+    return {
+        "status": "success",
+        "data": {
+            "itinerary_summary": summary,
+            "ai_suggestion": result["ai_content"]
+        }
+    }

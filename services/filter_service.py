@@ -1,15 +1,20 @@
 class FilterService:
 
-    def filter(self, places, user):
-        result = []
+    def __init__(self):
+        self.vibe_map = {
+            "chill": ["Chữa lành & Yên bình"],
+            "food": ["Ẩm thực & Đặc sản"],
+            "culture": ["Đậm văn hóa & Bản địa"],
+            "adventure": ["Năng động & Phiêu lưu"],
+            "creative": ["Sáng tạo & Truyền cảm hứng"],
+            "spiritual": ["Tâm linh & Tín ngưỡng"]
+        }
 
-        for p in places:
-            if p.rating < 4:
-                continue
+    def match_vibe(self, user_vibe, place_vibes):
+        mapped = self.vibe_map.get(user_vibe.lower(), [])
 
-            if p.price_max > user.budget:
-                continue
+        for v in place_vibes:
+            if v in mapped:
+                return True
 
-            result.append(p)
-
-        return result
+        return False
