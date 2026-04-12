@@ -1,27 +1,23 @@
 from services.graph_service import GraphService
 from services.llm_service import LLMService
+from services.filter_service import FilterService  
 from utils.distance import haversine
 
 class ItineraryService:
     def __init__(self):
         self.graph = GraphService()
         self.llm = LLMService()
-        self.vibe_map = {
-            "chill": "Chữa lành & Yên bình",
-            "food": "Ẩm thực & Đặc sản",
-            "culture": "Đậm văn hóa & Bản địa",
-            "adventure": "Năng động & Phiêu lưu",
-            "creative": "Sáng tạo & Truyền cảm hứng",
-            "spiritual": "Tâm linh & Tín ngưỡng"
-        }
+        self.filter_service = FilterService() 
 
-    def build(self, user):
-        mapped_vibe = self.vibe_map.get(user.vibe.lower(), user.vibe)
+    def build(self, user): 
          
         all_places = self.graph.get_all_places()
         scored_places = []
-        for p in all_places:
-            vibe_score = 5.0 if mapped_vibe in p["vibes"] else 0.0 
+        
+        for p in all_places: 
+            is_match = self.filter_service.match_vibe(user.vibe, p["vibes"])
+            
+            vibe_score = 5.0 if is_match else 0.0 
             total_score = vibe_score + (p["rating"] * 2) 
             scored_places.append((p, total_score))
          
