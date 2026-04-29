@@ -1,28 +1,61 @@
 import math
 
-class ScoringService:
-    def calculate(self, place, user):
-        # place: là dict đã được normalize từ GraphService
-        # user: là object UserRequest
-        
-        # kiểm tra vibe (vì place["vibes"] là một list)
-        # nếu vibe người dùng chọn nằm trong danh sách vibes của địa điểm
-        vibe_match = 1 if user.vibe in place.get("vibes", []) else 0
-        
-        # điểm review (log để giảm bớt sự chênh lệch quá lớn giữa các số lượng review)
-        review_count = place.get("review_count", 0)
-        review_score = math.log(review_count + 1)
-        
-        # kiểm tra ngân sách
-        price_max = place.get("price_max", 0)
-        price_match = 1 if price_max <= user.budget else 0.5
 
-        # tính tổng điểm theo trọng số m có thể sửa ở đây tùy m=)))
-        score = (
-            place.get("rating", 0) * 0.25 +
-            review_score * 0.15 +
-            vibe_match * 0.35 +
-            price_match * 0.25
+class ScoringService:
+
+    def calculate(self, place, user):
+
+        rating_score = self.rating_score(place)
+
+        review_score = self.review_score(place)
+
+        vibe_score = self.vibe_score(place, user)
+
+        price_score = self.price_score(place, user)
+
+        total_score = (
+            rating_score * 0.2 +
+            review_score * 0.1 +
+            vibe_score * 0.3 +
+            price_score * 0.4
         )
 
-        return score
+        return round(total_score, 2)
+
+    def rating_score(self, place):
+
+        rating = place.get("rating", 0)
+
+        return rating / 5
+
+    def review_score(self, place):
+
+        review_count = place.get(
+            "review_count",
+            0
+        )
+
+        return math.log(review_count + 1) / 10
+
+    def vibe_score(self, place, user):
+
+        place_vibes = place.get("vibes", [])
+
+        if user.vibe in place_vibes:
+            return 1
+
+        return 0
+
+    def price_score(self, place, user):
+
+        price_max = place.get("price_max")
+
+        if not price_max:
+            return 0.5
+
+        ratio = price_max / user.budget
+
+        if ratio > 1:
+            return -1
+
+        return 1 - ratio

@@ -185,7 +185,7 @@
                     summaryList.innerHTML += `
                         <div class="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg">
                             <span class="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded">Ngày ${day.day}</span>
-                            <p class="text-sm text-slate-700 font-medium">${day.places.join(' → ')}</p>
+                            <p class="text-sm text-slate-700 font-medium">${[...new Set(day.places)].join(' → ')}</p>
                         </div>
                     `;
                 });

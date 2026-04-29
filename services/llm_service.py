@@ -1,44 +1,100 @@
 from groq import Groq
+
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class LLMService:
+
     def __init__(self):
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-    def generate_itinerary_text(self, itinerary_data, user_vibe, weather="Trời nắng đẹp, không khí trong lành"):
-        # Prompt này copy từ bản test thành công của bạn
+        self.client = Groq(
+            api_key=os.getenv(
+                "GROQ_API_KEY"
+            )
+        )
+
+    def generate_itinerary_text(
+        self,
+        itinerary_data,
+        user
+    ):
+
         prompt = f"""
-Bạn là SoulViet AI – hướng dẫn viên du lịch Việt Nam.
+Bạn là SoulViet AI.
 
-Phong cách: {user_vibe}
-Thời tiết: {weather}
+Hãy viết lịch trình du lịch tự nhiên,
+có cảm xúc và giống travel blogger.
 
-Dữ liệu:
+======== USER ========
+
+Vibe:
+{user.vibe}
+
+Budget:
+{user.budget}
+
+Duration:
+{user.duration} ngày
+
+======== ITINERARY ========
+
 {itinerary_data}
 
-Yêu cầu:
-- Viết hành trình theo từng ngày
+======== REQUIREMENTS ========
+
+- Viết theo từng ngày
 - Có sáng / chiều / tối
-- Văn phong tự nhiên, có cảm xúc
+- Diễn đạt tự nhiên
+- Có storytelling nhẹ
 - Có tip nhỏ
-- Không nói kiểu AI
+- Có gợi ý ăn uống/chụp ảnh
+- Không viết như AI
+- Không lặp câu
+- Không markdown
 """
 
         try:
-            completion = self.client.chat.completions.create(
-                model="openai/gpt-oss-120b",  # Dùng đúng model bạn đã test thành công
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.8,
-                max_completion_tokens=2048,
-                top_p=1,
-                stream=False
+
+            completion = (
+                self.client.chat.completions.create(
+
+                    model="openai/gpt-oss-120b",
+
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+
+                    temperature=0.8,
+
+                    max_completion_tokens=2048,
+
+                    top_p=1,
+
+                    stream=False
+                )
             )
-            return completion.choices[0].message.content
+
+            return (
+                completion
+                .choices[0]
+                .message
+                .content
+            )
+
         except Exception as e:
-            print("❌ GROQ ERROR:", e)
-            return "AI đang bận, đây là lịch trình mẫu: Ngày 1 đi tham quan các làng nghề truyền thống 🌊"
+
+            print(
+                "❌ GROQ ERROR:",
+                e
+            )
+
+            return (
+                "AI đang bận 😭"
+            )
