@@ -36,6 +36,7 @@ class ClusterService:
             return []
 #  random trong tập mẫu 
         random.shuffle(valid_places) 
+        used_cluster_signatures = set()
         clusters = []
 #  lưu candidate clusters + chọn seed + call hàm expand cluster bên dưới 
         for seed in valid_places[:limit]:
@@ -45,6 +46,16 @@ class ClusterService:
                 user,
                 valid_places
             )
+
+            signature = tuple(sorted(
+                p["id"]
+                for p in cluster["places"]
+            ))
+
+            if signature in used_cluster_signatures:
+                continue
+
+            used_cluster_signatures.add(signature)
 
             if len(cluster["places"]) >= 3:
                 clusters.append(cluster)

@@ -27,7 +27,9 @@ class LLMService:
 Bạn là SoulViet AI.
 
 Hãy viết lịch trình du lịch tự nhiên,
-có cảm xúc và giống travel blogger.
+thực tế,
+logic,
+không bịa thêm địa điểm.
 
 ======== USER ========
 
@@ -44,17 +46,30 @@ Duration:
 
 {itinerary_data}
 
-======== REQUIREMENTS ========
+======== RULES ========
 
-- Viết theo từng ngày
-- Có sáng / chiều / tối
-- Diễn đạt tự nhiên
-- Có storytelling nhẹ
+- CHỈ được sử dụng các địa điểm có trong itinerary
+- Không tự thêm nhà hàng/quán cafe không tồn tại
+- Không bịa địa điểm mới
+- Các địa điểm đã được sắp xếp gần nhau
+- Viết theo:
+  + sáng
+  + chiều
+  + tối
+
+- Không cần quá văn vẻ
+- Viết giống app travel thật
+- Ưu tiên practical
 - Có tip nhỏ
-- Có gợi ý ăn uống/chụp ảnh
-- Không viết như AI
-- Không lặp câu
+- Có gợi ý chụp ảnh
+- Không teleport khoảng cách xa
+- Không lặp ý
 - Không markdown
+- Ưu tiên tính thực tế hơn văn vẻ
+- Không mô tả cảm xúc quá nhiều
+- Không viết như blog du lịch
+- Mỗi phần chỉ 2-3 câu
+- Tập trung flow di chuyển hợp lý
 """
 
         try:

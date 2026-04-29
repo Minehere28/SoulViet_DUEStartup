@@ -35,16 +35,23 @@ class ScoringService:
             0
         )
 
-        return math.log(review_count + 1) / 10
+        return min(
+            math.log(review_count + 1) / 7,
+            1
+        )
 
     def vibe_score(self, place, user):
 
         place_vibes = place.get("vibes", [])
 
-        if user.vibe in place_vibes:
-            return 1
+        matches = 0
 
-        return 0
+        for vibe in place_vibes:
+
+            if user.vibe.lower() in vibe.lower():
+                matches += 1
+
+        return min(matches / 2, 1)
 
     def price_score(self, place, user):
 
