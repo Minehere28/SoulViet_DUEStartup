@@ -208,11 +208,30 @@
                 });
 
                 const resData = await response.json();
-                const payload = resData.data;
 
                 // Hiển thị tóm tắt
                 const summaryList = document.getElementById('summary-list');
                 summaryList.innerHTML = '';
+
+                if (resData.success === false) {
+                    const messages = (resData.errors || [])
+                        .map(error => `<li><b>${error.field}:</b> ${error.message}</li>`)
+                        .join('');
+
+                    summaryList.innerHTML = `
+                        <div class="bg-red-50 border border-red-100 text-red-700 p-4 rounded-xl">
+                            <div class="font-bold mb-2">Không thể tạo lịch trình</div>
+                            <ul class="list-disc pl-5 space-y-1">
+                                ${messages || `<li>${resData.message || 'Vui lòng kiểm tra lại thông tin chuyến đi.'}</li>`}
+                            </ul>
+                        </div>
+                    `;
+                    document.getElementById('ai-content').innerHTML = '';
+                    result.classList.remove('hidden');
+                    return;
+                }
+
+                const payload = resData.data;
   
                 if (!payload.itinerary_summary.length) {
 
