@@ -1,0 +1,40 @@
+{
+  "extraction_date": "2026-07-22",
+  "fixture_row_count": 6,
+  "fixture_sha256": "D4EA565BA1621CE177F9E5121EAF725F5D43F777548A7720990184F9DD7E3038",
+  "replacement_data_commit": "760841a",
+  "selected_records": [
+    {
+      "id": "841cb6cf-93f8-556e-b02b-b5762154204a",
+      "rationale": "Overnight 18:00–00:00 opening windows.",
+      "source_row_number": 2
+    },
+    {
+      "id": "52bb0cd5-d8cb-59a3-a844-e385104ce979",
+      "rationale": "Bounded VND price and ordinary opening windows.",
+      "source_row_number": 4
+    },
+    {
+      "id": "b1e81353-90b3-5304-8cdf-ebb8a527be89",
+      "rationale": "Unclassified price, unavailable hours, and absent external PlaceId.",
+      "source_row_number": 17
+    },
+    {
+      "id": "5568cafc-947f-51e1-a784-f8ce90a910fa",
+      "rationale": "Closed weekday and split opening windows.",
+      "source_row_number": 37
+    },
+    {
+      "id": "475df276-a4d6-506a-bca6-b047e0c6995b",
+      "rationale": "Free price and all-day opening windows.",
+      "source_row_number": 49
+    },
+    {
+      "id": "18057d42-6583-59b3-84dc-4dd6eb4f1082",
+      "rationale": "Open-ended Từ 500.000đ price.",
+      "source_row_number": 205
+    }
+  ],
+  "source_path": "dataset/data-tourist-attraction-v2.csv",
+  "source_sha256": "38446971E7DF40E70475CC0FDD470F448FE6F3E838427FE5C94097376089F806"
+}

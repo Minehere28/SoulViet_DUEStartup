@@ -2,7 +2,7 @@
 
 ## Phase
 
-**Phase 1 — Canonical Travel IR compiler slice**
+**Phase 1 — Canonical Travel IR compiler slice (implementation complete; awaiting commit)**
 
 ## Completed Phase 0 — Repository and architecture foundation
 
@@ -43,7 +43,7 @@ The active specification is governed by:
 
 ## Active objective
 
-Implement the smallest complete compiler vertical slice:
+Review and commit the completed compiler vertical slice:
 
 ```text
 small source-derived CSV fixture
@@ -54,32 +54,38 @@ small source-derived CSV fixture
 -> JSON output through CLI
 ```
 
-The first implementation task is to create exactly the workspace members, contracts, compiler, CLI, fixture, and tests named in Specification 0002. It must use only the small fixture and must not modify or process the complete dataset.
+The exact workspace members, contracts, compiler, CLI, six-record fixture, provenance manifest, and tests named in Specification 0002 are implemented. The complete dataset was inspected only and remains unchanged.
 
-## Work allowed in Phase 1
+## Completed Phase 1 acceptance criteria
 
-Allowed:
+- [x] Python 3.11 uv workspace, local dependency direction, and committed lockfile are defined.
+- [x] The implementation tree matches the Specification 0002 creation manifest with no future placeholder directory.
+- [x] The fixture contains exactly six complete unchanged source records and provenance metadata with verified hashes.
+- [x] All 25 reviewed headers are required; additional headers are retained and reported deterministically.
+- [x] `RawSourceContext` is created without parsing canonical `Id`; `place_compiler.py` owns canonical identity parsing.
+- [x] Invalid `Id` produces `place=None` with an ordered fatal issue and no canonical provenance object.
+- [x] ADR-0003 canonical contracts and deterministic JSON serialization are implemented with strict typing.
+- [x] EWKB coordinates, fixed-point ratings, VND money, opening schedules, source taxonomy, JSON arrays, reviews, media, and timestamps are parsed deterministically.
+- [x] Unknown, free, closed, all-day, normal, split, and overnight values remain distinct.
+- [x] Evidence references and raw provenance are retained; `AiContext` remains provenance-only.
+- [x] CLI output is atomic and deterministic with exit codes 0, 1, and 2.
+- [x] Runtime code has no third-party dependency, network access, persistence, generated index, or out-of-scope component.
 
-- create the Python 3.11 uv workspace and only the files named by Specification 0002;
-- implement standard-library canonical contracts, deterministic source parsing, report serialization, and CLI file output;
-- add the source-derived fixture and its provenance manifest;
-- add pytest, strict mypy, Ruff, unit, architecture-boundary, and CLI integration tests;
-- update this status document with implementation results.
+## Verification record
 
-Not allowed:
+- `uv lock` — passed; 16 packages resolved and `uv.lock` generated.
+- `uv sync --all-packages --dev` — passed; all three workspace members installed in the verification environment.
+- `uv run ruff format --check .` — passed; 16 Python files formatted.
+- `uv run ruff check .` — passed.
+- `uv run mypy packages/contracts/src packages/compiler/src apps/cli/src` — passed with no issues in 9 source files.
+- `uv run pytest` — passed: 33 tests.
+- Two compact `soulviet-compile-fixture` runs exited 0 and produced byte-identical output with SHA-256 `05679D85C7865957D931DCB46BC7CB94279EB797E026EB9D625A8948BED71870`.
+- Fixture extraction was verified byte-for-byte against source rows 2, 4, 17, 37, 49, and 205.
+- Complete dataset SHA-256 remains `38446971E7DF40E70475CC0FDD470F448FE6F3E838427FE5C94097376089F806`.
 
-- FastAPI, web routes, workers, Neo4j, Qdrant, databases, persistence, GraphRAG, vector search, BM25, embeddings, model providers, LangGraph, or agents;
-- itinerary planning, routing, recommendation, live data, full-dataset migration, or generated indexes;
-- package, service, or application folders not named by Specification 0002;
-- changes to `dataset/data-tourist-attraction-v2.csv`;
-- Git commit or push commands as part of the implementation task.
+## Next task
 
-## Latest design-foundation record
-
-- ADR-0002 selects Python 3.11, a PEP 621 uv workspace, package boundaries, pytest, strict mypy, Ruff, and a CLI composition root.
-- ADR-0003 defines canonical `PlaceIR`, identity, provenance, fixed-point coordinates, money, opening schedules, evidence, media, and compilation issues/results.
-- Specification 0002 defines the complete fixture-to-JSON compiler slice, exact files, CLI contract, parser rules, failure behaviour, tests, and acceptance criteria.
-- No application code, package folder, dependency resolution, dataset change, Git commit, or push was performed by the design task.
+Commit the verified Phase 1 slice without adding generated caches or tool environments. Before implementing another capability, write and accept a focused specification for the next measurable vertical slice; the current recommendation remains a structured retrieval baseline over compiled fixture IR.
 
 ## Known limitations and deferred decisions
 
@@ -87,3 +93,4 @@ Not allowed:
 - Repository-secret and Git-history remediation remain a separate security decision; no secret value is reproduced in active documentation.
 - Ontology mappings for province/category/vibe/type codes are intentionally deferred; Phase 1 uses source-token normalization only.
 - Structured retrieval baseline and evaluation, derived-index infrastructure, planning/validation semantics, workflow/model-provider boundaries, and backend delivery/persistence contracts remain future ADRs/slices.
+- The supplied dataset has no single record combining `Từ 500.000đ` with split opening hours; fixture coverage is collective across the open-ended-price record and the closed/split-window record, as permitted by Specification 0002.
