@@ -10,15 +10,19 @@ This repository is being rebuilt from first principles. The previous prototype r
 
 ## Project status
 
-The project is currently in **Phase 0 — Repository and architecture foundation**.
+The project is currently in **Phase 1 — Canonical Travel IR compiler slice**.
+
+The active specification is:
+
+`docs/04-spec/0002-canonical-travel-ir-compiler.md`
 
 No new production engine should be implemented until the foundational documents, domain boundaries, and first vertical slice have been reviewed.
 
 Current status:
 
 - Legacy branches are preserved.
-- The rebuild branch should be created from `feat/engine-restructure-wip`.
-- The old `graph.pt` runtime is deprecated.
+- The active rebuild branch is `rebuild/career-os-v2`.
+- `graph.pt` is absent from the active tree and is not part of the runtime design.
 - The old deterministic-engine design is reference material only.
 - The new architecture follows a compiler-first, canonical-IR approach inspired by Career OS.
 - The final system will combine hybrid GraphRAG, deterministic planning, validation, and bounded agentic orchestration.

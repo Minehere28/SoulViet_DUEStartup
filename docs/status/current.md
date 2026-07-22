@@ -2,133 +2,88 @@
 
 ## Phase
 
-**Phase 0 — Repository and architecture foundation**
+**Phase 1 — Canonical Travel IR compiler slice**
 
-## Active objective
+## Completed Phase 0 — Repository and architecture foundation
 
-Review the active repository-rebuild specification, resolve its security and data-provenance gates, and then perform the minimum structural cleanup on the rebuild branch.
-
-## Source branch
-
-Create the rebuild from:
-
-```text
-feat/engine-restructure-wip
-```
-
-New branch:
+The rebuild branch is active:
 
 ```text
 rebuild/career-os-v2
 ```
 
-The old branches remain unchanged.
+Completed repository milestones:
 
-## Current architecture status
+- `104c411` — foundation documents established;
+- `760841a` — legacy dataset replaced by `dataset/data-tourist-attraction-v2.csv`;
+- `185239a` — legacy prototype runtime, experimental UI, old tests, `graph.pt`, and tracked Python bytecode removed.
 
-The legacy system is not the target architecture.
+Phase 0 acceptance criteria are complete:
 
-Known legacy characteristics include:
+- [x] `rebuild/career-os-v2` exists and legacy branches remain unchanged.
+- [x] README, AGENTS, vision, ADR-0001, current status, and the repository-rebuild specification establish the rebuild authority.
+- [x] Legacy runtime modules and obsolete documents no longer appear authoritative in the active tree.
+- [x] The active tree contains no tracked `__pycache__` or Python bytecode.
+- [x] `graph.pt` is not part of the runtime design or active tree.
+- [x] The next implementation scope is a written vertical slice rather than a global rewrite.
 
-- root-level experimental application files;
-- runtime dependency on `graph.pt`;
-- prototype service/module layouts;
-- deterministic-engine documentation that was written before the GraphRAG + agentic direction was finalized.
-
-These are reference materials only.
+The legacy system remains recoverable through Git history and preserved branches. It is not implementation authority.
 
 ## Active specification
 
-The active specification is:
-
 ```text
-docs/04-spec/0001-repository-rebuild.md
+docs/04-spec/0002-canonical-travel-ir-compiler.md
 ```
 
-It inventories the current tree and defines the exact cleanup, retained assets, minimum tracked tree, acceptance criteria, and ADR blockers. No cleanup or engine implementation has been executed yet.
+The active specification is governed by:
 
-## Work allowed in this phase
+- `docs/01-adr/0001-rebuild-from-engine-restructure.md`;
+- `docs/01-adr/0002-python-workspace-and-package-boundaries.md`;
+- `docs/01-adr/0003-canonical-travel-ir.md`.
+
+## Active objective
+
+Implement the smallest complete compiler vertical slice:
+
+```text
+small source-derived CSV fixture
+-> source-row adapter
+-> deterministic parsers
+-> PlaceIR compiler
+-> validation report
+-> JSON output through CLI
+```
+
+The first implementation task is to create exactly the workspace members, contracts, compiler, CLI, fixture, and tests named in Specification 0002. It must use only the small fixture and must not modify or process the complete dataset.
+
+## Work allowed in Phase 1
 
 Allowed:
 
-- review branch contents;
-- create the rebuild branch;
-- replace root `README.md`;
-- add `AGENTS.md`;
-- add vision, ADR, and status documents;
-- inventory files as retain, rewrite, archive-by-history, or delete;
-- propose the first vertical slice.
+- create the Python 3.11 uv workspace and only the files named by Specification 0002;
+- implement standard-library canonical contracts, deterministic source parsing, report serialization, and CLI file output;
+- add the source-derived fixture and its provenance manifest;
+- add pytest, strict mypy, Ruff, unit, architecture-boundary, and CLI integration tests;
+- update this status document with implementation results.
 
-Not allowed yet:
+Not allowed:
 
-- implement GraphRAG;
-- implement agents;
-- create all target packages;
-- choose final retrieval weights;
-- migrate to Neo4j or a vector store;
-- rewrite the entire engine in one task;
-- preserve old modules without review.
+- FastAPI, web routes, workers, Neo4j, Qdrant, databases, persistence, GraphRAG, vector search, BM25, embeddings, model providers, LangGraph, or agents;
+- itinerary planning, routing, recommendation, live data, full-dataset migration, or generated indexes;
+- package, service, or application folders not named by Specification 0002;
+- changes to `dataset/data-tourist-attraction-v2.csv`;
+- Git commit or push commands as part of the implementation task.
 
-## Proposed first commits
+## Latest design-foundation record
 
-### Commit 1 — Foundation documents
+- ADR-0002 selects Python 3.11, a PEP 621 uv workspace, package boundaries, pytest, strict mypy, Ruff, and a CLI composition root.
+- ADR-0003 defines canonical `PlaceIR`, identity, provenance, fixed-point coordinates, money, opening schedules, evidence, media, and compilation issues/results.
+- Specification 0002 defines the complete fixture-to-JSON compiler slice, exact files, CLI contract, parser rules, failure behaviour, tests, and acceptance criteria.
+- No application code, package folder, dependency resolution, dataset change, Git commit, or push was performed by the design task.
 
-- `README.md`
-- `AGENTS.md`
-- `docs/00-vision/00-project-vision.md`
-- `docs/01-adr/0001-rebuild-from-engine-restructure.md`
-- `docs/status/current.md`
+## Known limitations and deferred decisions
 
-### Commit 2 — Rebuild specification
-
-Created in the working tree:
-
-```text
-docs/04-spec/0001-repository-rebuild.md
-```
-
-The specification must inventory the current tree and define exact file operations.
-
-### Commit 3 — Structural cleanup
-
-Delete obsolete generated and prototype artifacts. Keep only reviewed data and minimal project scaffolding.
-
-No engine behavior should be added in this commit.
-
-## Latest task record
-
-- Created `docs/04-spec/0001-repository-rebuild.md`.
-- Inventoried all 28 current `src/` Python files and all 23 pending legacy-document deletions.
-- Recorded the replacement CSV schema, checksum, retention gate, and its incompatibility with the prototype mapper.
-- Recorded a credential-like value in the deleted legacy CSV without reproducing it; credential and Git-history remediation require a focused decision.
-- Verification performed: specification section/classification checks, explicit path-coverage checks, UTF-8 replacement-character check, and repository-status review.
-- Runtime tests were not run because this task changes documentation only and adds no executable engine.
-- Known limitation: the checkout remains `feat/engine-restructure-wip`; no branch ref, cleanup file, source file, test, or runtime artifact was changed by this task.
-- Next recommended commit: accept the repository secret/Git-history remediation ADR before structural cleanup.
-
-## Acceptance criteria for Phase 0
-
-- [ ] `rebuild/career-os-v2` exists.
-- [ ] Existing branches are unchanged.
-- [ ] README explains the target system and current phase.
-- [ ] AGENTS.md defines reading order and coding rules.
-- [ ] ADR-0001 records the branch and rebuild strategy.
-- [ ] Legacy documents no longer appear authoritative.
-- [ ] The active tree contains no tracked `__pycache__`.
-- [ ] `graph.pt` is not part of the new runtime design.
-- [ ] The next implementation scope is a written vertical slice, not a global rewrite prompt.
-
-## Known decisions still required
-
-- Repository secret rotation and Git-history remediation.
-- Travel-data provenance, licensing, snapshot relationship, and storage policy.
-- Python workspace and packaging strategy.
-- Canonical IR schema.
-- Ontology node and edge taxonomy.
-- Source-of-truth adapter contract.
-- Initial structured-retrieval baseline.
-- Evaluation dataset and metrics.
-- Final infrastructure choices for graph and vector indexes.
-- Workflow framework and agent-provider choices.
-
-These decisions must be made through focused ADRs, not embedded into a single large system prompt.
+- Dataset source ownership, licensing, review/media rights, freshness, and the relationship to upstream operational data remain unresolved. The compiler preserves provenance but does not establish factual authority.
+- Repository-secret and Git-history remediation remain a separate security decision; no secret value is reproduced in active documentation.
+- Ontology mappings for province/category/vibe/type codes are intentionally deferred; Phase 1 uses source-token normalization only.
+- Structured retrieval baseline and evaluation, derived-index infrastructure, planning/validation semantics, workflow/model-provider boundaries, and backend delivery/persistence contracts remain future ADRs/slices.
