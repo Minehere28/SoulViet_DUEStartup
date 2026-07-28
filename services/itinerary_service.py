@@ -2,8 +2,8 @@ from services.graph_service import GraphService
 
 class ItineraryService:
 
-    def __init__(self):
-        self.graph = GraphService()
+    def __init__(self, graph=None):
+        self.graph = graph or GraphService()
 
     def build(self, user):
  
@@ -19,7 +19,11 @@ class ItineraryService:
 
         clusters = []
         for cluster in cluster_ids:
-            group = [self.graph.get_place(pid) for pid in cluster]
+            group = [
+                place
+                for pid in cluster
+                if (place := self.graph.get_place(pid)) is not None
+            ]
             if group:
                 clusters.append(group)
  

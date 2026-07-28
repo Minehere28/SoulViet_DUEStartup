@@ -1,14 +1,10 @@
 from fastapi import APIRouter
-from services.data_service import DataService
 from services.itinerary_service import ItineraryService
 from models.user_request import UserRequest
 
 router = APIRouter()
- 
-data_service = DataService("graph.pt")
-places = data_service.load()
 
-itinerary_service = ItineraryService(places)
+itinerary_service = ItineraryService()
 
 @router.post("/plan")
 def plan_trip(request: dict):
@@ -21,7 +17,16 @@ def plan_trip(request: dict):
     for i, day in enumerate(clusters):
         result.append({
             "day": i + 1,
-            "places": [p.name for p in day]
+            "places": [
+                {
+                    "id": place["id"],
+                    "name": place["name"],
+                    "lat": place["lat"],
+                    "lng": place["lng"],
+                    "rating": place["rating"],
+                }
+                for place in day
+            ],
         })
 
     return {"itinerary": result}
