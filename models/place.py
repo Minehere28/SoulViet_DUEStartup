@@ -22,7 +22,4 @@ class Place:
         else:
             self.types = [t.strip() for t in types.split(",") if t.strip()]
 
-        self.price_min = float(row.get("PriceMin", 0))
-        self.price_max = float(row.get("PriceMax", 0))
-
         self.description = row.get("Generated_Description", "")
