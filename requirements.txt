@@ -4,4 +4,3 @@ pandas
 neo4j
 torch
 python-dotenv
-requests

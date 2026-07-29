@@ -1,49 +1,132 @@
-import requests
 import json
 import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
+
 class LLMService:
+    """Optional OpenRouter client with a deterministic local fallback."""
+
     def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model_id = "arcee-ai/trinity-large-preview:free"  
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        self.model_id = os.getenv(
+            "OPENROUTER_MODEL",
+            "openrouter/free",
+        ).strip()
         self.url = "https://openrouter.ai/api/v1/chat/completions"
 
-    def generate_itinerary_text(self, itinerary_data, user_vibe, weather):
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
+    @staticmethod
+    def fallback_reply(itinerary, applied_changes):
+        place_count = sum(len(day["places"]) for day in itinerary)
+        changes = ", ".join(applied_changes) if applied_changes else (
+            "chưa nhận diện được thay đổi cụ thể"
+        )
+        return (
+            f"Mình đã tạo lại hành trình gồm {len(itinerary)} ngày và "
+            f"{place_count} địa điểm. Điều chỉnh: {changes}. "
+            "Bạn có thể nói rõ số ngày, khu vực, vibe, số địa điểm "
+            "mỗi ngày hoặc bán kính tối đa để mình chỉnh tiếp."
+        )
+
+    def chat(self, message, itinerary, request_data, applied_changes):
+        fallback = self.fallback_reply(itinerary, applied_changes)
+        if not self.api_key:
+            return {
+                "answer": fallback,
+                "provider": "local_fallback",
+                "model": None,
+                "fallback_reason": "OPENROUTER_API_KEY is not configured",
+            }
+
+        compact_itinerary = [
+            {
+                "day": index + 1,
+                "date": day["date"],
+                "places": [
+                    {
+                        "name": place["name"],
+                        "arrival_time": place["arrival_time"],
+                        "departure_time": place["departure_time"],
+                    }
+                    for place in day["places"]
+                ],
+            }
+            for index, day in enumerate(itinerary)
+        ]
+        system_prompt = (
+            "Bạn là trợ lý du lịch SoulViet. Trả lời ngắn gọn bằng "
+            "tiếng Việt. Không bịa giá, giờ mở cửa hay thời gian đường bộ. "
+            "Hãy giải thích các thay đổi đã áp dụng và nêu cảnh báo nếu "
+            "dữ liệu lịch chưa xác minh."
+        )
+        user_prompt = {
+            "message": message,
+            "applied_changes": applied_changes,
+            "request": request_data,
+            "itinerary": compact_itinerary,
         }
- 
-        prompt = f"""
-        Bạn là Trinity, trợ lý du lịch của SoulViet.
-        Thời tiết hiện tại: {weather}.
-        Yêu cầu của khách: Thích phong cách {user_vibe}.
-        
-        Đây là danh sách địa điểm đã chọn:
-        {json.dumps(itinerary_data, ensure_ascii=False)}
-
-        Hãy viết một bài giới thiệu hành trình cực kỳ lôi cuốn, có tâm. 
-        Mô tả từng ngày nên đi đâu, cảm nhận không khí thế nào. 
-        Lưu ý: Nếu thời tiết xấu, hãy dặn khách chuẩn bị ô hoặc đổi lịch đi cafe.
-        Văn phong: Gần gũi, sành điệu, đậm chất văn hóa Việt Nam.
-        """
-
-        payload = {
-            "model": self.model_id,
-            "messages": [
+        try:
+            payload = json.dumps(
                 {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        }
-
-        response = requests.post(self.url, headers=headers, data=json.dumps(payload))
-        
-        if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
-        else:
-            return f"Lỗi gọi AI: {response.text}"
+                    "model": self.model_id,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                user_prompt,
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                    "temperature": 0.4,
+                    "max_tokens": 500,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            request = Request(
+                self.url,
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://127.0.0.1:8000",
+                    "X-Title": "SoulViet AI",
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=30) as response:
+                response_payload = json.loads(
+                    response.read().decode("utf-8")
+                )
+            answer = response_payload[
+                "choices"
+            ][0]["message"]["content"].strip()
+            if not answer:
+                raise ValueError("OpenRouter returned empty content")
+            return {
+                "answer": answer,
+                "provider": "openrouter",
+                "model": response_payload.get("model", self.model_id),
+                "fallback_reason": None,
+            }
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return {
+                "answer": fallback,
+                "provider": "local_fallback",
+                "model": None,
+                "fallback_reason": error.__class__.__name__,
+            }

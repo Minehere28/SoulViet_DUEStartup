@@ -1,7 +1,6 @@
-import math
-
 import torch
 
+from services.scoring_service import ScoringService
 from utils.distance import haversine
 
 
@@ -16,7 +15,7 @@ class GraphService:
             (item["review_count"] for item in self.nodes.values()),
             default=0,
         )
-        self.max_log_reviews = math.log1p(max_reviews)
+        self.scoring = ScoringService(max_reviews)
 
     @staticmethod
     def _normalize_nodes(raw_nodes):
@@ -65,7 +64,30 @@ class GraphService:
                 )
                 or "",
                 "operation_hours": row.get("operation_hours", ""),
+                "opening_hours": dict(row.get("opening_hours", {})),
+                "opening_hours_status": row.get(
+                    "opening_hours_status", "unknown"
+                ),
+                "opening_hours_needs_review": bool(
+                    row.get("opening_hours_needs_review", False)
+                ),
+                "opening_hours_verification_status": row.get(
+                    "opening_hours_verification_status",
+                    "source_unverified",
+                ),
+                "visit_duration_minutes": int(
+                    row.get("visit_duration_minutes", 90) or 90
+                ),
+                "visit_duration_source": row.get(
+                    "visit_duration_source", "default_estimate"
+                ),
+                "visit_duration_confidence": row.get(
+                    "visit_duration_confidence", "low"
+                ),
                 "activities": list(row.get("activities", [])),
+                "activity_categories": list(
+                    row.get("activity_categories", [])
+                ),
                 "reviews": list(row.get("reviews", [])),
                 "vibes": list(vibes),
                 "types": list(types),
@@ -117,23 +139,13 @@ class GraphService:
         for place in self.nodes.values():
             if place["rating"] < 4:
                 continue
+            if place["region"] != user.region:
+                continue
             result.append(place)
         return result
 
     def score_place(self, place, user):
-        vibe_match = 1 if user.vibe in place["vibes"] else 0
-        rating_score = min(max(place["rating"] / 5, 0), 1)
-        popularity_score = (
-            math.log1p(place["review_count"]) / self.max_log_reviews
-            if self.max_log_reviews
-            else 0
-        )
-
-        return (
-            rating_score * 0.45
-            + popularity_score * 0.20
-            + vibe_match * 0.35
-        )
+        return self.scoring.calculate(place, user)
 
     def optimize_route(self, place_list):
         if not place_list:

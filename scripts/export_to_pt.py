@@ -6,6 +6,7 @@ or exploring data in Neo4j.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -37,18 +38,32 @@ def export_graph(output_path):
                 OPTIONAL MATCH (p)-[:HAS_VIBE]->(v:Vibe)
                 OPTIONAL MATCH (p)-[:HAS_TYPE]->(t:Type)
                 OPTIONAL MATCH (p)-[:LOCATED_IN]->(r:Region)
+                OPTIONAL MATCH (p)-[:SUPPORTS_ACTIVITY]->(a:Activity)
                 RETURN p, collect(DISTINCT v.name) AS vibes,
                        collect(DISTINCT t.name) AS types,
-                       head(collect(DISTINCT r.name)) AS region
+                       head(collect(DISTINCT r.name)) AS region,
+                       collect(DISTINCT a.name) AS activity_categories
                 """
             )
             nodes = {}
             for record in node_result:
                 props = dict(record["p"])
                 place_id = props["id"]
+                opening_hours_json = props.pop(
+                    "opening_hours_json", "{}"
+                )
+                try:
+                    props["opening_hours"] = json.loads(
+                        opening_hours_json
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    props["opening_hours"] = {}
                 props["vibes"] = record["vibes"]
                 props["types"] = record["types"]
                 props["region"] = record["region"] or props.get("region", "")
+                props["activity_categories"] = record[
+                    "activity_categories"
+                ]
                 nodes[place_id] = props
 
             near = {place_id: [] for place_id in nodes}
@@ -71,7 +86,7 @@ def export_graph(output_path):
     edge_count = sum(len(neighbors) for neighbors in near.values())
     graph = {
         "metadata": {
-            "schema_version": 2,
+            "schema_version": 3,
             "source": "neo4j",
             "node_count": len(nodes),
             "near_edge_count": edge_count,

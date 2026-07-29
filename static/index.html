@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SoulViet AI - Hành Trình Bản Địa</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .prose h1,
+        .prose h2,
+        .prose h3 {
+            color: #1a202c;
+            font-weight: bold;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .prose p {
+            margin-bottom: 1rem;
+            line-height: 1.7;
+        }
+
+        .prose ul {
+            list-style-type: disc;
+            padding-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .loading-dots:after {
+            content: ' .';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+
+        @keyframes dots {
+
+            0%,
+            20% {
+                content: ' .';
+            }
+
+            40% {
+                content: ' ..';
+            }
+
+            60% {
+                content: ' ...';
+            }
+
+            80%,
+            100% {
+                content: '';
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.4s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 min-h-screen font-sans">
+
+    <!-- Header -->
+    <nav class="bg-white shadow-sm border-b">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-map-location-dot text-orange-500 text-2xl"></i>
+                <span class="text-xl font-bold text-slate-800">SoulViet <span class="text-orange-500">AI</span></span>
+            </div>
+            <div class="text-sm text-slate-500">Trợ lý du lịch thông minh</div>
+        </div>
+    </nav>
+
+    <section class="bg-gradient-to-r from-orange-500 to-amber-400 text-white">
+        <div class="max-w-6xl mx-auto px-4 py-14">
+
+            <h1 class="text-4xl font-black mb-4 leading-tight">
+                SoulViet AI
+            </h1>
+
+            <p class="text-lg text-orange-50 max-w-2xl">
+                AI du lịch bản địa giúp bạn xây dựng hành trình thực tế,
+                tối ưu khoảng cách, ngân sách và trải nghiệm.
+            </p>
+
+        </div>
+    </section>
+
+    <main class="max-w-6xl mx-auto px-4 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+            <!-- Form Nhập Liệu -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-3xl shadow-xl p-6 border border-slate-100 sticky top-6">
+                    <h2 class="text-lg font-semibold mb-6 flex items-center">
+                        <i class="fa-solid fa-sliders mr-2 text-orange-500"></i> Tùy chỉnh chuyến đi
+                    </h2>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Số ngày đi</label>
+                            <input type="number" id="duration" value="2" min="1" max="14"
+                                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none transition">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Khu vực</label>
+                            <select id="region"
+                                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none transition">
+                                <option value="Đà Nẵng">Đà Nẵng</option>
+                                <option value="Thừa Thiên Huế">Thừa Thiên Huế</option>
+                                <option value="Quảng Nam">Quảng Nam</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Ngày bắt đầu</label>
+                            <input type="date" id="start-date"
+                                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none transition">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Phong cách trải nghiệm</label>
+                            <select id="vibe"
+                                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none transition">
+                                <option value="Đậm văn hóa &amp; Bản địa">Đậm văn hóa &amp; Bản địa</option>
+                                <option value="Chữa lành &amp; Yên bình">Chữa lành &amp; Yên bình</option>
+                                <option value="Trải nghiệm đa dạng">Trải nghiệm đa dạng</option>
+                                <option value="Năng động &amp; Phiêu lưu">Năng động &amp; Phiêu lưu</option>
+                                <option value="Sáng tạo &amp; Truyền cảm hứng">Sáng tạo &amp; Truyền cảm hứng</option>
+                            </select>
+                        </div>
+
+                        <button onclick="planTrip()" id="btn-submit"
+                            class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-orange-200 flex items-center justify-center">
+                            <span>Lên kế hoạch ngay</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Kết Quả -->
+            <div class="lg:col-span-2">
+                <!-- Màn hình chờ -->
+                <div id="loading"
+                    class="hidden bg-white rounded-2xl shadow-sm p-12 text-center border border-slate-100">
+                    <div class="inline-block animate-bounce mb-4">
+                        <i class="fa-solid fa-paper-plane text-4xl text-orange-500"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-slate-800 loading-dots">SoulViet AI đang phân tích hành trình
+                        phù hợp
+                    </h3>
+                    <p class="text-slate-500 mt-2">Đang tối ưu tuyến đường, ngân sách và trải nghiệm địa phương...</p>
+                </div>
+
+                <!-- Nội dung lịch trình -->
+                <div id="result" class="hidden space-y-6 fade-in">
+                    <!-- Tóm tắt nhanh -->
+                    <div class="bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
+                        <h3 class="font-bold text-slate-800 mb-4 flex items-center">
+                            <i class="fa-solid fa-list-check mr-2 text-green-500"></i> Tóm tắt lộ trình
+                        </h3>
+                        <div id="summary-list" class="space-y-3">
+                            <!-- JS chèn vào đây -->
+                        </div>
+                    </div>
+
+                    <!-- Nội dung AI -->
+                    <div class="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 sticky top-4">
+                        <div id="ai-content" class="prose max-w-none text-slate-700">
+                            <!-- JS chèn vào đây -->
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
+                        <h3 class="font-bold text-slate-800 mb-3">
+                            <i class="fa-solid fa-comments mr-2 text-orange-500"></i>
+                            Tùy chỉnh hành trình
+                        </h3>
+                        <div id="chat-answer"
+                            class="hidden mb-4 rounded-xl bg-orange-50 p-4 text-sm text-slate-700"></div>
+                        <div class="flex gap-3">
+                            <input id="chat-message" type="text"
+                                placeholder="Ví dụ: Đổi thành 3 ngày, tối đa 4 địa điểm mỗi ngày"
+                                class="flex-1 px-4 py-3 border rounded-xl focus:ring-2 focus:ring-orange-500 outline-none">
+                            <button onclick="customizeTrip()" id="btn-chat"
+                                class="bg-slate-800 hover:bg-slate-900 text-white font-semibold px-5 rounded-xl">
+                                Gửi
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const startDateInput = document.getElementById('start-date');
+        let currentPlanRequest = null;
+        startDateInput.value = new Date().toISOString().slice(0, 10);
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
+        function renderPlace(place) {
+            const warning = place.schedule_warnings?.length
+                ? `<div class="mt-2 text-xs text-amber-700">
+                    ⚠ ${place.schedule_warnings.map(escapeHtml).join(' · ')}
+                   </div>`
+                : '';
+
+            return `
+                <div class="flex gap-3 py-3 border-b border-slate-200 last:border-0">
+                    <div class="w-24 shrink-0 font-semibold text-orange-600">
+                        ${escapeHtml(place.arrival_time)}–${escapeHtml(place.departure_time)}
+                    </div>
+                    <div class="min-w-0">
+                        <div class="font-semibold text-slate-800">${escapeHtml(place.name)}</div>
+                        <div class="text-xs text-slate-500 mt-1">
+                            Tham quan ${place.visit_duration_minutes} phút ·
+                            Di chuyển ${place.travel_time_minutes} phút ·
+                            ${place.distance_from_previous_km} km
+                        </div>
+                        ${warning}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderItinerary(itinerary) {
+            const summaryList = document.getElementById('summary-list');
+            summaryList.innerHTML = '';
+            if (!itinerary?.length) {
+                summaryList.innerHTML = `
+                    <div class="bg-red-50 border border-red-100 text-red-600 p-4 rounded-xl">
+                        Không tìm thấy lịch trình phù hợp.
+                    </div>
+                `;
+                return;
+            }
+
+            itinerary.forEach((day, index) => {
+                const places = day.places.map(renderPlace).join('');
+                summaryList.innerHTML += `
+                    <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                            <div>
+                                <span class="bg-orange-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                                    Ngày ${day.day ?? index + 1}
+                                </span>
+                                <span class="ml-2 text-sm font-medium text-slate-700">
+                                    ${escapeHtml(day.weekday)}, ${escapeHtml(day.date)}
+                                </span>
+                            </div>
+                            <div class="flex gap-2 text-xs">
+                                <span class="bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                                    🚗 ${day.total_distance_km} km
+                                </span>
+                                <span class="bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                                    ⏱ ${day.total_travel_time_minutes} phút di chuyển
+                                </span>
+                            </div>
+                        </div>
+                        <div>${places || '<div class="text-sm text-slate-500">Chưa có địa điểm phù hợp trong ngày này.</div>'}</div>
+                    </div>
+                `;
+            });
+        }
+
+        async function planTrip() {
+            const btn = document.getElementById('btn-submit');
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            const summaryList = document.getElementById('summary-list');
+
+            const data = {
+                duration: Number(document.getElementById('duration').value),
+                region: document.getElementById('region').value,
+                start_date: startDateInput.value,
+                vibe: document.getElementById('vibe').value
+            };
+            currentPlanRequest = data;
+
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            loading.classList.remove('hidden');
+            result.classList.add('hidden');
+
+            try {
+                const response = await fetch('/plan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    const message = payload.detail
+                        ? JSON.stringify(payload.detail)
+                        : 'Không thể tạo lịch trình.';
+                    throw new Error(message);
+                }
+
+                renderItinerary(payload.itinerary);
+
+                document.getElementById('ai-content').innerHTML = `
+                    <h3>Lưu ý về lịch trình</h3>
+                    <p>Giờ mở cửa và thời lượng tham quan hiện được lấy từ dữ liệu nguồn hoặc ước tính theo loại địa điểm.</p>
+                    <p>Thời gian di chuyển đang là ước tính theo khoảng cách thẳng, chưa phải thời gian đường bộ thực tế.</p>
+                `;
+                result.classList.remove('hidden');
+            } catch (error) {
+                alert(`Có lỗi xảy ra khi lập lịch trình: ${error.message}`);
+                console.error(error);
+            } finally {
+                loading.classList.add('hidden');
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }
+        }
+
+        async function customizeTrip() {
+            const messageInput = document.getElementById('chat-message');
+            const answer = document.getElementById('chat-answer');
+            const button = document.getElementById('btn-chat');
+            const message = messageInput.value.trim();
+            if (!currentPlanRequest || !message) {
+                alert('Hãy tạo lịch trình và nhập yêu cầu tùy chỉnh trước.');
+                return;
+            }
+
+            button.disabled = true;
+            button.classList.add('opacity-50');
+            try {
+                const response = await fetch('/assistant/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message,
+                        current_request: currentPlanRequest
+                    })
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(JSON.stringify(payload.detail));
+                }
+
+                currentPlanRequest = payload.request;
+                document.getElementById('duration').value = payload.request.duration;
+                document.getElementById('region').value = payload.request.region;
+                document.getElementById('vibe').value = payload.request.vibe;
+                startDateInput.value = payload.request.start_date;
+                renderItinerary(payload.itinerary);
+                answer.textContent = payload.answer;
+                answer.classList.remove('hidden');
+                messageInput.value = '';
+            } catch (error) {
+                alert(`Không thể tùy chỉnh hành trình: ${error.message}`);
+            } finally {
+                button.disabled = false;
+                button.classList.remove('opacity-50');
+            }
+        }
+    </script>
+</body>
+
+</html>
