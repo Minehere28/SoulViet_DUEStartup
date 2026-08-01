@@ -37,6 +37,15 @@ REQUIRED_COLUMNS = {
     "VibeTag",
     "MainImage",
     "LandImages_JSON",
+    "EntranceFeeMin",
+    "EntranceFeeMax",
+    "TypicalSpendMin",
+    "TypicalSpendMax",
+    "PriceUnit",
+    "PriceSource",
+    "PriceVerifiedAt",
+    "PriceConfidence",
+    "PriceVerificationStatus",
 }
 
 QUANG_NAM_PLACES = (
@@ -287,6 +296,17 @@ def create_nodes(dataframe):
             else [],
             "main_image": clean_text(row.get("MainImage")),
             "images": clean_json_list(row.get("LandImages_JSON")),
+            "entrance_fee_min": clean_int(row.get("EntranceFeeMin")),
+            "entrance_fee_max": clean_int(row.get("EntranceFeeMax")),
+            "typical_spend_min": clean_int(row.get("TypicalSpendMin")),
+            "typical_spend_max": clean_int(row.get("TypicalSpendMax")),
+            "price_unit": clean_text(row.get("PriceUnit")),
+            "price_source": clean_text(row.get("PriceSource")),
+            "price_verified_at": clean_text(row.get("PriceVerifiedAt")),
+            "price_confidence": clean_text(row.get("PriceConfidence")),
+            "price_verification_status": clean_text(
+                row.get("PriceVerificationStatus")
+            ),
         }
     return nodes
 

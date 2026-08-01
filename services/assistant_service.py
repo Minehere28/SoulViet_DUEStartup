@@ -11,8 +11,7 @@ class AssistantService:
         self.itinerary = itinerary or ItineraryService()
         self.llm = llm or LLMService()
 
-    @staticmethod
-    def _extract_adjustments(message):
+    def _extract_adjustments(self, message, current_request):
         normalized = message.casefold()
         updates = {}
         applied = []
@@ -44,6 +43,19 @@ class AssistantService:
                 updates["max_daily_distance_km"] = distance
                 applied.append(f"quãng đường tối đa {distance:g} km/ngày")
 
+        budget_aliases = {
+            "tiết kiệm": "economy",
+            "bình dân": "economy",
+            "tiêu chuẩn": "standard",
+            "cao cấp": "premium",
+            "premium": "premium",
+        }
+        for keyword, level in budget_aliases.items():
+            if keyword in normalized:
+                updates["budget_level"] = level
+                applied.append(f"mức ngân sách {keyword}")
+                break
+
         for region in get_args(RegionName):
             if region.casefold() in normalized:
                 updates["region"] = region
@@ -56,11 +68,31 @@ class AssistantService:
                 applied.append(f"vibe {vibe}")
                 break
 
+        remove_requested = re.search(
+            r"\b(?:bỏ|xóa|loại|không\s+(?:đi|ghé))\b",
+            normalized,
+        )
+        if remove_requested:
+            excluded = set(current_request.excluded_place_ids)
+            candidates = [
+                place
+                for place in self.itinerary.graph.get_all_places()
+                if place["region"] == current_request.region
+                and place["name"].casefold() in normalized
+            ]
+            candidates.sort(key=lambda place: len(place["name"]), reverse=True)
+            if candidates:
+                selected = candidates[0]
+                excluded.add(selected["id"])
+                updates["excluded_place_ids"] = sorted(excluded)
+                applied.append(f"bỏ địa điểm {selected['name']}")
+
         return updates, applied
 
     def customize(self, assistant_request):
         updates, applied = self._extract_adjustments(
-            assistant_request.message
+            assistant_request.message,
+            assistant_request.current_request,
         )
         raw_request = assistant_request.current_request.model_dump()
         raw_request.update(updates)

@@ -25,6 +25,8 @@ def plan_trip(request: UserRequest):
                 "total_travel_time_minutes"
             ],
             "travel_time_source": day["travel_time_source"],
+            "estimated_spend_min": day["estimated_spend_min"],
+            "estimated_spend_max": day["estimated_spend_max"],
             "places": [
                 {
                     "id": place["id"],
@@ -72,6 +74,14 @@ def plan_trip(request: UserRequest):
                     ],
                     "schedule_warnings": place[
                         "schedule_warnings"
+                    ],
+                    "spend_min": place["spend_min"],
+                    "spend_max": place["spend_max"],
+                    "price_unit": place["price_unit"],
+                    "price_source": place["price_source"],
+                    "price_confidence": place["price_confidence"],
+                    "price_verification_status": place[
+                        "price_verification_status"
                     ],
                 }
                 for place in places

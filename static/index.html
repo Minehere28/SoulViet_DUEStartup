@@ -135,6 +135,21 @@
                         </div>
 
                         <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="block text-sm font-medium text-slate-700">Ngân sách (ước tính/người)</label>
+                                <span id="budget-preview" class="text-xs font-semibold text-emerald-700"></span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1" role="radiogroup">
+                                <button type="button" class="budget-option rounded-lg px-2 py-2 text-xs font-medium transition" data-budget="economy">Tiết kiệm</button>
+                                <button type="button" class="budget-option rounded-lg px-2 py-2 text-xs font-medium transition" data-budget="standard">Tiêu chuẩn</button>
+                                <button type="button" class="budget-option rounded-lg px-2 py-2 text-xs font-medium transition" data-budget="premium">Cao cấp</button>
+                            </div>
+                            <p class="mt-2 text-[11px] leading-4 text-slate-500">
+                                Chi tiêu tại địa điểm; chưa gồm lưu trú và di chuyển.
+                            </p>
+                        </div>
+
+                        <div>
                             <label class="block text-sm font-medium text-slate-700 mb-1">Phong cách trải nghiệm</label>
                             <select id="vibe"
                                 class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none transition">
@@ -212,7 +227,36 @@
     <script>
         const startDateInput = document.getElementById('start-date');
         let currentPlanRequest = null;
+        let selectedBudget = 'standard';
+        const budgetDailyLimits = { economy: 350000, standard: 700000, premium: 1400000 };
         startDateInput.value = new Date().toISOString().slice(0, 10);
+
+        function formatVnd(value) {
+            return `${new Intl.NumberFormat('vi-VN').format(value)}đ`;
+        }
+
+        function updateBudgetControls() {
+            document.querySelectorAll('.budget-option').forEach(button => {
+                const selected = button.dataset.budget === selectedBudget;
+                button.classList.toggle('bg-white', selected);
+                button.classList.toggle('shadow-sm', selected);
+                button.classList.toggle('text-emerald-800', selected);
+                button.classList.toggle('font-bold', selected);
+                button.setAttribute('aria-pressed', String(selected));
+            });
+            const duration = Number(document.getElementById('duration').value) || 1;
+            document.getElementById('budget-preview').textContent =
+                `Mục tiêu khoảng ${formatVnd(budgetDailyLimits[selectedBudget] * duration)}`;
+        }
+
+        document.querySelectorAll('.budget-option').forEach(button => {
+            button.addEventListener('click', () => {
+                selectedBudget = button.dataset.budget;
+                updateBudgetControls();
+            });
+        });
+        document.getElementById('duration').addEventListener('input', updateBudgetControls);
+        updateBudgetControls();
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -241,6 +285,9 @@
                             Tham quan ${place.visit_duration_minutes} phút ·
                             Di chuyển ${place.travel_time_minutes} phút ·
                             ${place.distance_from_previous_km} km
+                        </div>
+                        <div class="mt-1 text-xs font-medium text-emerald-700">
+                            Ước tính ${formatVnd(place.spend_min)}–${formatVnd(place.spend_max)}/người
                         </div>
                         ${warning}
                     </div>
@@ -280,6 +327,9 @@
                                 <span class="bg-purple-100 text-purple-700 px-2 py-1 rounded">
                                     ⏱ ${day.total_travel_time_minutes} phút di chuyển
                                 </span>
+                                <span class="bg-emerald-100 text-emerald-700 px-2 py-1 rounded">
+                                    ${formatVnd(day.estimated_spend_min)}–${formatVnd(day.estimated_spend_max)}
+                                </span>
                             </div>
                         </div>
                         <div>${places || '<div class="text-sm text-slate-500">Chưa có địa điểm phù hợp trong ngày này.</div>'}</div>
@@ -298,7 +348,8 @@
                 duration: Number(document.getElementById('duration').value),
                 region: document.getElementById('region').value,
                 start_date: startDateInput.value,
-                vibe: document.getElementById('vibe').value
+                vibe: document.getElementById('vibe').value,
+                budget_level: selectedBudget
             };
             currentPlanRequest = data;
 
@@ -328,6 +379,7 @@
                     <h3>Lưu ý về lịch trình</h3>
                     <p>Giờ mở cửa và thời lượng tham quan hiện được lấy từ dữ liệu nguồn hoặc ước tính theo loại địa điểm.</p>
                     <p>Thời gian di chuyển đang là ước tính theo khoảng cách thẳng, chưa phải thời gian đường bộ thực tế.</p>
+                    <p><strong>Chi phí là khoảng ước tính/người theo loại địa điểm và mức chi tiêu đã chọn.</strong> Giá chưa được đối tác xác nhận, chưa gồm lưu trú và di chuyển; hãy kiểm tra lại trước khi đặt dịch vụ.</p>
                 `;
                 result.classList.remove('hidden');
             } catch (error) {
@@ -370,6 +422,8 @@
                 document.getElementById('duration').value = payload.request.duration;
                 document.getElementById('region').value = payload.request.region;
                 document.getElementById('vibe').value = payload.request.vibe;
+                selectedBudget = payload.request.budget_level || 'standard';
+                updateBudgetControls();
                 startDateInput.value = payload.request.start_date;
                 renderItinerary(payload.itinerary);
                 answer.textContent = payload.answer;

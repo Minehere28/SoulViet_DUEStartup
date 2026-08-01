@@ -16,7 +16,7 @@ class LLMService:
         self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
         self.model_id = os.getenv(
             "OPENROUTER_MODEL",
-            "openrouter/free",
+            "openai/gpt-5-mini",
         ).strip()
         self.url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -41,6 +41,7 @@ class LLMService:
                 "provider": "local_fallback",
                 "model": None,
                 "fallback_reason": "OPENROUTER_API_KEY is not configured",
+                "usage": None,
             }
 
         compact_itinerary = [
@@ -114,9 +115,17 @@ class LLMService:
                 "provider": "openrouter",
                 "model": response_payload.get("model", self.model_id),
                 "fallback_reason": None,
+                "usage": response_payload.get("usage"),
+            }
+        except HTTPError as error:
+            return {
+                "answer": fallback,
+                "provider": "local_fallback",
+                "model": None,
+                "fallback_reason": f"HTTPError_{error.code}",
+                "usage": None,
             }
         except (
-            HTTPError,
             URLError,
             TimeoutError,
             KeyError,
@@ -129,4 +138,5 @@ class LLMService:
                 "provider": "local_fallback",
                 "model": None,
                 "fallback_reason": error.__class__.__name__,
+                "usage": None,
             }

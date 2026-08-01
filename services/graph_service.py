@@ -93,6 +93,17 @@ class GraphService:
                 "types": list(types),
                 "main_image": row.get("main_image", ""),
                 "images": list(row.get("images", [])),
+                "entrance_fee_min": int(row.get("entrance_fee_min", 0) or 0),
+                "entrance_fee_max": int(row.get("entrance_fee_max", 0) or 0),
+                "typical_spend_min": int(row.get("typical_spend_min", 0) or 0),
+                "typical_spend_max": int(row.get("typical_spend_max", 0) or 0),
+                "price_unit": row.get("price_unit", "person"),
+                "price_source": row.get("price_source", "type_estimate"),
+                "price_verified_at": row.get("price_verified_at", ""),
+                "price_confidence": row.get("price_confidence", "low"),
+                "price_verification_status": row.get(
+                    "price_verification_status", "estimated"
+                ),
             }
 
         return nodes
@@ -136,7 +147,10 @@ class GraphService:
 
     def filter_places(self, user):
         result = []
+        excluded_ids = set(user.excluded_place_ids)
         for place in self.nodes.values():
+            if place["id"] in excluded_ids:
+                continue
             if place["rating"] < 4:
                 continue
             if place["region"] != user.region:

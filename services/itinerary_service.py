@@ -2,6 +2,7 @@ import math
 from datetime import timedelta
 
 from services.graph_service import GraphService
+from services.budget_service import BudgetService
 from utils.distance import haversine
 from utils.opening_hours import (
     WEEKDAY_LABELS,
@@ -224,6 +225,9 @@ class ItineraryService:
 
     def build(self, user):
         filtered = self.graph.filter_places(user)
+        budget_limit = BudgetService.trip_limit(
+            user.budget_level, user.duration
+        )
         scored = [
             (place, self.graph.score_place(place, user))
             for place in filtered
@@ -241,6 +245,7 @@ class ItineraryService:
         candidates = [
             {
                 **place,
+                **BudgetService.estimate_place(place, user.budget_level),
                 "recommendation_score": score["total"],
                 "score_breakdown": score,
             }
@@ -270,5 +275,21 @@ class ItineraryService:
                     day_start_minutes,
                     day_end_minutes,
                 )
+            )
+        running_spend = 0
+        for day in days:
+            accepted = []
+            for place in day["places"]:
+                expected = place["expected_spend"]
+                if running_spend + expected > budget_limit:
+                    continue
+                accepted.append(place)
+                running_spend += expected
+            day["places"] = accepted
+            day["estimated_spend_min"] = sum(
+                place["spend_min"] for place in accepted
+            )
+            day["estimated_spend_max"] = sum(
+                place["spend_max"] for place in accepted
             )
         return days

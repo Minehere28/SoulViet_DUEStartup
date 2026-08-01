@@ -19,6 +19,9 @@ RegionName = Literal[
 ]
 
 
+BudgetLevel = Literal["economy", "standard", "premium"]
+
+
 class UserRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -40,6 +43,11 @@ class UserRequest(BaseModel):
     region: RegionName = Field(
         description="Tỉnh/thành phố của hành trình.",
         examples=["Quảng Nam"],
+    )
+    budget_level: BudgetLevel = Field(
+        default="standard",
+        description="Estimated per-person spending style.",
+        examples=["standard"],
     )
     max_places_per_day: int = Field(
         default=5,
@@ -64,6 +72,11 @@ class UserRequest(BaseModel):
             "Thiên nhiên & Ngắm cảnh."
         ),
         examples=[["Ẩm thực", "Tham quan & Khám phá"]],
+    )
+    excluded_place_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Place IDs explicitly removed by the user.",
     )
     start_date: date = Field(
         description="Ngày bắt đầu hành trình theo định dạng YYYY-MM-DD.",
