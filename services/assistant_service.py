@@ -29,7 +29,7 @@ class AssistantService:
         )
         if place_match:
             max_places = int(place_match.group(1))
-            if 1 <= max_places <= 6:
+            if 1 <= max_places <= 8:
                 updates["max_places_per_day"] = max_places
                 applied.append(f"tối đa {max_places} địa điểm/ngày")
 

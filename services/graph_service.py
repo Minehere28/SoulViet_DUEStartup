@@ -1,7 +1,6 @@
 import torch
 
 from services.scoring_service import ScoringService
-from utils.distance import haversine
 
 
 class GraphService:
@@ -160,28 +159,6 @@ class GraphService:
 
     def score_place(self, place, user):
         return self.scoring.calculate(place, user)
-
-    def optimize_route(self, place_list):
-        if not place_list:
-            return []
-
-        visited = [place_list[0]]
-        unvisited = place_list[1:]
-        while unvisited:
-            last = visited[-1]
-            next_place = min(
-                unvisited,
-                key=lambda place: haversine(
-                    last["lat"],
-                    last["lng"],
-                    place["lat"],
-                    place["lng"],
-                ),
-            )
-            visited.append(next_place)
-            unvisited.remove(next_place)
-
-        return visited
 
     def get_clusters(self, place_ids):
         allowed_ids = set(place_ids)

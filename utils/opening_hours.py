@@ -201,27 +201,53 @@ def weekday_key(value):
     raise TypeError("value must be datetime.date")
 
 
-def find_visit_slot(day_schedule, earliest_minutes, duration_minutes, end_minutes):
+def visit_start_windows(
+    day_schedule,
+    duration_minutes,
+    earliest_minutes,
+    end_minutes,
+):
+    """Return feasible inclusive start-time windows for one visit."""
     status = day_schedule.get("status", "unknown")
     if status == "closed":
-        return None
-    if status == "unknown":
-        end = earliest_minutes + duration_minutes
-        return (earliest_minutes, end) if end <= end_minutes else None
+        return []
+    if status in {"unknown", "open_24h"}:
+        latest = end_minutes - duration_minutes
+        return (
+            [(earliest_minutes, latest)]
+            if earliest_minutes <= latest
+            else []
+        )
 
     intervals = day_schedule.get("intervals", [])
-    if status == "open_24h":
-        end = earliest_minutes + duration_minutes
-        return (earliest_minutes, end) if end <= end_minutes else None
-
+    windows = []
     for interval in intervals:
         opening = time_to_minutes(interval["open"])
         closing = time_to_minutes(interval["close"])
         if interval.get("closes_next_day"):
             closing += 24 * 60
         start = max(earliest_minutes, opening)
-        end = start + duration_minutes
-        if end <= min(closing, end_minutes):
-            return start, end
+        latest = min(closing, end_minutes) - duration_minutes
+        if start <= latest:
+            windows.append((start, latest))
+    windows.sort()
+    return windows
+
+
+def find_visit_slot(
+    day_schedule,
+    earliest_minutes,
+    duration_minutes,
+    end_minutes,
+):
+    windows = visit_start_windows(
+        day_schedule,
+        duration_minutes,
+        earliest_minutes,
+        end_minutes,
+    )
+    if windows:
+        start = windows[0][0]
+        return start, start + duration_minutes
     return None
 

@@ -52,9 +52,9 @@ class UserRequest(BaseModel):
     max_places_per_day: int = Field(
         default=5,
         ge=1,
-        le=6,
+        le=8,
         strict=True,
-        description="Số địa điểm tối đa trong một ngày, từ 1 đến 6.",
+        description="Số địa điểm tối đa trong một ngày, từ 1 đến 8.",
         examples=[5],
     )
     max_daily_distance_km: float = Field(
@@ -92,11 +92,34 @@ class UserRequest(BaseModel):
         description="Giờ kết thúc mỗi ngày theo định dạng HH:MM.",
         examples=["21:00"],
     )
+    start_lat: float | None = Field(
+        default=None,
+        ge=-90,
+        le=90,
+        description="Vĩ độ khách sạn hoặc điểm xuất phát mỗi ngày.",
+        examples=[16.0544],
+    )
+    start_lng: float | None = Field(
+        default=None,
+        ge=-180,
+        le=180,
+        description="Kinh độ khách sạn hoặc điểm xuất phát mỗi ngày.",
+        examples=[108.2022],
+    )
+    start_name: str = Field(
+        default="Điểm xuất phát",
+        max_length=120,
+        description="Tên khách sạn hoặc điểm xuất phát.",
+    )
 
     @model_validator(mode="after")
     def validate_daily_time_window(self):
         if self.day_end_time <= self.day_start_time:
             raise ValueError(
                 "day_end_time phải muộn hơn day_start_time trong cùng ngày"
+            )
+        if (self.start_lat is None) != (self.start_lng is None):
+            raise ValueError(
+                "start_lat và start_lng phải được cung cấp cùng nhau"
             )
         return self

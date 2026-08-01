@@ -26,18 +26,29 @@ Mở:
   "day_end_time": "21:00",
   "max_places_per_day": 5,
   "max_daily_distance_km": 20,
+  "start_lat": 16.0544,
+  "start_lng": 108.2022,
+  "start_name": "Khách sạn",
   "preferred_activities": ["Thiên nhiên & Ngắm cảnh"]
 }
 ```
 
 - `duration`: 1–14 ngày.
-- `max_places_per_day`: 1–6.
+- `max_places_per_day`: tối đa 8; số điểm thực tế có thể ít hơn.
 - `max_daily_distance_km`: lớn hơn 0 và tối đa 100 km.
 - `preferred_activities`: tối đa 10 nhóm hoạt động.
+- `start_lat` và `start_lng`: tùy chọn nhưng phải truyền cùng nhau. Khi có,
+  OSRM sẽ tính chặng từ điểm xuất phát đến điểm tham quan đầu tiên.
 
 Response là timeline theo ngày, gồm giờ đến/rời đi, thời lượng tham quan,
 khoảng cách, cảnh báo giờ mở cửa và recommendation score có breakdown.
-Thời gian di chuyển hiện vẫn là ước tính Haversine, chưa phải routing đường bộ.
+Khoảng cách và thời gian di chuyển được lấy từ ma trận đường bộ của OSRM
+Table API. Nếu public OSRM không khả dụng hoặc không tìm thấy tuyến, response
+sẽ ghi rõ `haversine_fallback` và `routing_fallback_reason`.
+Mỗi ngày, tối đa 12 ứng viên khả thi được đưa vào Google OR-Tools. Thứ tự
+địa điểm được tối ưu theo tổng thời gian từ ma trận OSRM, giờ mở cửa,
+thời lượng tham quan, giới hạn số điểm và tổng quãng đường. Tuyến bắt đầu
+từ điểm xuất phát nhưng không bắt buộc quay lại điểm đó.
 
 ## Tùy chỉnh bằng chatbot
 
@@ -64,6 +75,9 @@ Biến môi trường tùy chọn:
 ```dotenv
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
+OSRM_BASE_URL=http://router.project-osrm.org
+OSRM_TIMEOUT_SECONDS=15
+ROUTE_OPTIMIZER_TIME_LIMIT_MS=500
 ```
 
 ## API địa điểm và similarity động

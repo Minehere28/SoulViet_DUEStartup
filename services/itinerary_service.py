@@ -1,41 +1,28 @@
-import math
 from datetime import timedelta
 
 from services.graph_service import GraphService
 from services.budget_service import BudgetService
-from utils.distance import haversine
+from services.routing_service import RoutingService
+from services.route_optimizer import RouteOptimizer
 from utils.opening_hours import (
     WEEKDAY_LABELS,
     find_visit_slot,
     minutes_to_time,
     time_to_minutes,
+    visit_start_windows,
     weekday_key,
 )
 
 
 class ItineraryService:
-    ESTIMATED_TRAVEL_SPEED_KMH = 25.0
+    MAX_OSRM_COORDINATES = 100
+    MAX_CANDIDATES_PER_DAY = 12
+    START_PLACE_ID = "__route_start__"
 
-    def __init__(self, graph=None):
+    def __init__(self, graph=None, routing=None, optimizer=None):
         self.graph = graph or GraphService()
-
-    @staticmethod
-    def _distance(first, second):
-        return haversine(
-            first["lat"],
-            first["lng"],
-            second["lat"],
-            second["lng"],
-        )
-
-    @classmethod
-    def _estimate_travel_minutes(cls, distance_km):
-        if distance_km <= 0:
-            return 0
-        return max(
-            1,
-            math.ceil(distance_km / cls.ESTIMATED_TRAVEL_SPEED_KMH * 60),
-        )
+        self.routing = routing or RoutingService()
+        self.optimizer = optimizer or RouteOptimizer()
 
     @staticmethod
     def _day_schedule(place, weekday):
@@ -58,16 +45,28 @@ class ItineraryService:
         distance_used,
         max_daily_distance,
         weekday,
+        route_matrix,
+        start_place=None,
     ):
-        distance = (
-            self._distance(day_places[-1], candidate)
-            if day_places
-            else 0.0
+        previous = day_places[-1] if day_places else start_place
+        metric = (
+            route_matrix["metrics"].get(
+                (previous["id"], candidate["id"])
+            )
+            if previous
+            else {
+                "distance_km": 0.0,
+                "duration_minutes": 0,
+                "source": route_matrix["source"],
+            }
         )
+        if metric is None:
+            return None
+        distance = metric["distance_km"]
         if distance_used + distance > max_daily_distance:
             return None
 
-        travel_minutes = self._estimate_travel_minutes(distance)
+        travel_minutes = metric["duration_minutes"]
         earliest = current_minutes + travel_minutes
         visit_minutes = candidate.get("visit_duration_minutes", 90)
         day_schedule = self._day_schedule(candidate, weekday)
@@ -96,6 +95,7 @@ class ItineraryService:
             "departure_minutes": slot[1],
             "day_schedule": day_schedule,
             "warnings": warnings,
+            "travel_time_source": metric["source"],
         }
 
     def _select_next_place(
@@ -108,6 +108,8 @@ class ItineraryService:
         distance_used,
         max_daily_distance,
         weekday,
+        route_matrix,
+        start_place=None,
     ):
         connected_ids = {
             edge["to"]
@@ -124,11 +126,14 @@ class ItineraryService:
                 distance_used,
                 max_daily_distance,
                 weekday,
+                route_matrix,
+                start_place,
             )
             if evaluation is None:
                 continue
             eligible.append(
                 (
+                    evaluation["travel_minutes"],
                     bool(day_places)
                     and candidate["id"] not in connected_ids,
                     evaluation["distance"],
@@ -139,8 +144,8 @@ class ItineraryService:
 
         if not eligible:
             return None
-        eligible.sort(key=lambda item: item[:3])
-        return eligible[0][3]
+        eligible.sort(key=lambda item: item[:4])
+        return eligible[0][4]
 
     @staticmethod
     def _timeline_item(evaluation):
@@ -158,7 +163,7 @@ class ItineraryService:
                 evaluation["distance"], 2
             ),
             "travel_time_minutes": evaluation["travel_minutes"],
-            "travel_time_source": "haversine_speed_estimate",
+            "travel_time_source": evaluation["travel_time_source"],
             "opening_status_for_day": day_schedule.get(
                 "status", "unknown"
             ),
@@ -182,6 +187,8 @@ class ItineraryService:
         trip_date,
         day_start_minutes,
         day_end_minutes,
+        route_matrix,
+        start_place=None,
     ):
         weekday = weekday_key(trip_date)
         day_places = []
@@ -190,16 +197,75 @@ class ItineraryService:
         travel_minutes_used = 0
         current_minutes = day_start_minutes
 
-        while remaining and len(day_places) < max_places:
+        all_day_schedules = {
+            place["id"]: self._day_schedule(place, weekday)
+            for place in remaining
+        }
+        optimization_candidates = [
+            place
+            for place in remaining
+            if visit_start_windows(
+                all_day_schedules[place["id"]],
+                place.get("visit_duration_minutes", 90),
+                day_start_minutes,
+                day_end_minutes,
+            )
+        ][: self.MAX_CANDIDATES_PER_DAY]
+        day_schedules = {
+            place["id"]: all_day_schedules[place["id"]]
+            for place in optimization_candidates
+        }
+        optimized_places = self.optimizer.optimize(
+            optimization_candidates,
+            day_schedules,
+            route_matrix,
+            max_places,
+            max_daily_distance,
+            day_start_minutes,
+            day_end_minutes,
+            start_place,
+        )
+        optimization_source = "ortools"
+
+        if optimized_places is not None:
+            for place in optimized_places:
+                selection = self._evaluate_candidate(
+                    place,
+                    day_places,
+                    current_minutes,
+                    day_end_minutes,
+                    distance_used,
+                    max_daily_distance,
+                    weekday,
+                    route_matrix,
+                    start_place,
+                )
+                if selection is None:
+                    break
+                day_places.append(place)
+                timeline.append(self._timeline_item(selection))
+                remaining.remove(place)
+                distance_used += selection["distance"]
+                travel_minutes_used += selection["travel_minutes"]
+                current_minutes = selection["departure_minutes"]
+
+        while (
+            optimized_places is None
+            and optimization_candidates
+            and len(day_places) < max_places
+        ):
+            optimization_source = "greedy_fallback"
             selection = self._select_next_place(
                 day_places,
-                remaining,
+                optimization_candidates,
                 scores,
                 current_minutes,
                 day_end_minutes,
                 distance_used,
                 max_daily_distance,
                 weekday,
+                route_matrix,
+                start_place,
             )
             if selection is None:
                 break
@@ -208,6 +274,7 @@ class ItineraryService:
             day_places.append(place)
             timeline.append(self._timeline_item(selection))
             remaining.remove(place)
+            optimization_candidates.remove(place)
             distance_used += selection["distance"]
             travel_minutes_used += selection["travel_minutes"]
             current_minutes = selection["departure_minutes"]
@@ -220,7 +287,21 @@ class ItineraryService:
             "places": timeline,
             "total_distance_km": round(distance_used, 2),
             "total_travel_time_minutes": travel_minutes_used,
-            "travel_time_source": "haversine_speed_estimate",
+            "travel_time_source": route_matrix["source"],
+            "routing_fallback_reason": route_matrix["fallback_reason"],
+            "route_optimization_source": optimization_source,
+            "route_optimization_objective": (
+                "travel_time_plus_visit_duration"
+            ),
+            "start_location": (
+                {
+                    "name": start_place["name"],
+                    "lat": start_place["lat"],
+                    "lng": start_place["lng"],
+                }
+                if start_place
+                else None
+            ),
         }
 
     def build(self, user):
@@ -237,11 +318,24 @@ class ItineraryService:
             reverse=True,
         )
 
-        candidate_limit = max(
-            30,
-            user.duration * user.max_places_per_day * 3,
+        start_place = (
+            {
+                "id": self.START_PLACE_ID,
+                "name": user.start_name,
+                "lat": user.start_lat,
+                "lng": user.start_lng,
+            }
+            if user.start_lat is not None
+            else None
         )
-        candidate_limit = min(candidate_limit, len(scored))
+        available_osrm_slots = self.MAX_OSRM_COORDINATES - int(
+            start_place is not None
+        )
+        candidate_limit = min(
+            user.duration * self.MAX_CANDIDATES_PER_DAY,
+            len(scored),
+            available_osrm_slots,
+        )
         candidates = [
             {
                 **place,
@@ -255,6 +349,12 @@ class ItineraryService:
             place["id"]: score["total"]
             for place, score in scored[:candidate_limit]
         }
+        routing_places = (
+            [start_place, *candidates]
+            if start_place
+            else candidates
+        )
+        route_matrix = self.routing.build_matrix(routing_places)
 
         day_start_minutes = time_to_minutes(
             user.day_start_time.strftime("%H:%M")
@@ -274,6 +374,8 @@ class ItineraryService:
                     trip_date,
                     day_start_minutes,
                     day_end_minutes,
+                    route_matrix,
+                    start_place,
                 )
             )
         running_spend = 0

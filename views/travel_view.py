@@ -20,11 +20,21 @@ def plan_trip(request: UserRequest):
             "region": request.region,
             "day_start_time": day["day_start_time"],
             "day_end_time": day["day_end_time"],
+            "start_location": day["start_location"],
             "total_distance_km": day["total_distance_km"],
             "total_travel_time_minutes": day[
                 "total_travel_time_minutes"
             ],
             "travel_time_source": day["travel_time_source"],
+            "routing_fallback_reason": day[
+                "routing_fallback_reason"
+            ],
+            "route_optimization_source": day[
+                "route_optimization_source"
+            ],
+            "route_optimization_objective": day[
+                "route_optimization_objective"
+            ],
             "estimated_spend_min": day["estimated_spend_min"],
             "estimated_spend_max": day["estimated_spend_max"],
             "places": [
@@ -59,6 +69,9 @@ def plan_trip(request: UserRequest):
                     ],
                     "travel_time_minutes": place[
                         "travel_time_minutes"
+                    ],
+                    "travel_time_source": place[
+                        "travel_time_source"
                     ],
                     "opening_status_for_day": place[
                         "opening_status_for_day"
