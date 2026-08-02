@@ -50,6 +50,13 @@ Mỗi ngày, tối đa 12 ứng viên khả thi được đưa vào Google OR-To
 thời lượng tham quan, giới hạn số điểm và tổng quãng đường. Tuyến bắt đầu
 từ điểm xuất phát nhưng không bắt buộc quay lại điểm đó.
 
+Hai nhóm nhà hàng thay thế cũng được đưa trực tiếp vào cùng bài toán tối ưu:
+ăn trưa `11:30-13:00` và ăn tối `18:00-19:30`. Mỗi bữa là một time window
+cố định, không chiếm `max_places_per_day`; OR-Tools chọn tối đa một nhà hàng
+cho mỗi bữa theo chi phí di chuyển OSRM của toàn tuyến. Timeline trả thêm
+`item_type`, `meal_slot` và `meal_label`. Trạng thái giờ mở cửa `unknown` vẫn
+được dùng như một giả định mềm nhưng không hiển thị cảnh báo cho người dùng.
+
 ## Tùy chỉnh bằng chatbot
 
 `POST /assistant/chat`

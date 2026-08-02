@@ -295,21 +295,27 @@
         }
 
         function renderPlace(place) {
-            const warning = place.schedule_warnings?.length
+            const isMeal = place.item_type === 'meal';
+            const visibleWarnings = (place.schedule_warnings || []).filter(
+                warning => !warning.toLowerCase().includes('chưa được xác minh')
+            );
+            const warning = visibleWarnings.length
                 ? `<div class="mt-2 text-xs text-amber-700">
-                    ⚠ ${place.schedule_warnings.map(escapeHtml).join(' · ')}
+                    ⚠ ${visibleWarnings.map(escapeHtml).join(' · ')}
                    </div>`
                 : '';
 
             return `
                 <div class="flex gap-3 py-3 border-b border-slate-200 last:border-0">
-                    <div class="w-24 shrink-0 font-semibold text-orange-600">
+                    <div class="w-24 shrink-0 font-semibold ${isMeal ? 'text-emerald-600' : 'text-orange-600'}">
                         ${escapeHtml(place.arrival_time)}–${escapeHtml(place.departure_time)}
                     </div>
                     <div class="min-w-0">
-                        <div class="font-semibold text-slate-800">${escapeHtml(place.name)}</div>
+                        <div class="font-semibold text-slate-800">
+                            ${isMeal ? `🍽️ ${escapeHtml(place.meal_label)} · ` : ''}${escapeHtml(place.name)}
+                        </div>
                         <div class="text-xs text-slate-500 mt-1">
-                            Tham quan ${place.visit_duration_minutes} phút ·
+                            ${isMeal ? 'Dùng bữa 90' : `Tham quan ${place.visit_duration_minutes}`} phút ·
                             Di chuyển ${place.travel_time_minutes} phút ·
                             ${place.distance_from_previous_km} km
                         </div>

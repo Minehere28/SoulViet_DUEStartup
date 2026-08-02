@@ -217,6 +217,51 @@ class RouteOptimizerTests(unittest.TestCase):
         self.assertEqual(len(ids), 8)
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_meals_have_fixed_windows_and_do_not_consume_place_quota(self):
+        attractions = [
+            {"id": "a", "visit_duration_minutes": 60},
+            {"id": "b", "visit_duration_minutes": 60},
+        ]
+        physical_restaurants = [
+            {"id": "r1", "visit_duration_minutes": 90},
+            {"id": "r2", "visit_duration_minutes": 90},
+        ]
+        meals = [
+            {
+                **physical_restaurants[0], "id": "lunch-r1", "routing_id": "r1",
+                "item_type": "meal", "meal_slot": "lunch",
+                "fixed_start_minutes": 11 * 60 + 30,
+            },
+            {
+                **physical_restaurants[1], "id": "dinner-r2", "routing_id": "r2",
+                "item_type": "meal", "meal_slot": "dinner",
+                "fixed_start_minutes": 18 * 60,
+            },
+        ]
+        places = [*attractions, *meals]
+        route_matrix = matrix(
+            places=[*attractions, *physical_restaurants],
+            travel_minutes=5,
+        )
+        schedules = {
+            place["id"]: {"status": "unknown", "intervals": []}
+            for place in places
+        }
+
+        result = self.optimizer.optimize(
+            places, schedules, route_matrix, 2, 100,
+            8 * 60, 21 * 60,
+        )
+
+        self.assertEqual(
+            len([place for place in result if place.get("item_type") != "meal"]),
+            2,
+        )
+        self.assertEqual(
+            {place.get("meal_slot") for place in result if place.get("item_type") == "meal"},
+            {"lunch", "dinner"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

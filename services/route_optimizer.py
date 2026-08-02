@@ -9,6 +9,7 @@ class RouteOptimizer:
     """Minimize one day's travel time under routing constraints."""
 
     DROP_PENALTY = 10_000_000
+    MEAL_DROP_PENALTY = 100_000_000
 
     def __init__(self, time_limit_milliseconds=None):
         self.time_limit_milliseconds = int(
@@ -20,7 +21,9 @@ class RouteOptimizer:
     def _metric(route_matrix, source, destination):
         if source is None or destination is None:
             return {"distance_km": 0.0, "duration_minutes": 0}
-        return route_matrix["metrics"][(source["id"], destination["id"])]
+        source_id = source.get("routing_id", source["id"])
+        destination_id = destination.get("routing_id", destination["id"])
+        return route_matrix["metrics"][(source_id, destination_id)]
 
     @staticmethod
     def _feasible_windows(
@@ -29,12 +32,20 @@ class RouteOptimizer:
         day_start_minutes,
         day_end_minutes,
     ):
-        return visit_start_windows(
+        windows = visit_start_windows(
             day_schedule,
             place.get("visit_duration_minutes", 90),
             day_start_minutes,
             day_end_minutes,
         )
+        fixed_start = place.get("fixed_start_minutes")
+        if fixed_start is None:
+            return windows
+        return [
+            (fixed_start, fixed_start)
+            for start, end in windows
+            if start <= fixed_start <= end
+        ]
 
     def optimize(
         self,
@@ -116,8 +127,10 @@ class RouteOptimizer:
         time_dimension = routing.GetDimensionOrDie("Time")
 
         def count_callback(from_index):
+            node = manager.IndexToNode(from_index)
             return int(
-                manager.IndexToNode(from_index) >= first_place_node
+                node >= first_place_node
+                and nodes[node].get("item_type") != "meal"
             )
 
         count_callback_index = routing.RegisterUnaryTransitCallback(
@@ -131,6 +144,8 @@ class RouteOptimizer:
             "PlaceCount",
         )
 
+        meal_indices = {}
+        restaurant_indices = {}
         for node, place in enumerate(
             feasible,
             start=first_place_node,
@@ -157,10 +172,21 @@ class RouteOptimizer:
                 if gap_start <= gap_end:
                     cumul.RemoveInterval(gap_start, gap_end)
 
-            routing.AddDisjunction(
-                [index],
-                self.DROP_PENALTY,
-            )
+            if place.get("item_type") == "meal":
+                meal_indices.setdefault(place["meal_slot"], []).append(index)
+                restaurant_indices.setdefault(
+                    place.get("routing_id", place["id"]), []
+                ).append(index)
+            else:
+                routing.AddDisjunction([index], self.DROP_PENALTY)
+
+        for indices in meal_indices.values():
+            routing.AddDisjunction(indices, self.MEAL_DROP_PENALTY, 1)
+
+        solver = routing.solver()
+        for indices in restaurant_indices.values():
+            if len(indices) > 1:
+                solver.Add(sum(routing.ActiveVar(index) for index in indices) <= 1)
 
         search = pywrapcp.DefaultRoutingSearchParameters()
         search.first_solution_strategy = (

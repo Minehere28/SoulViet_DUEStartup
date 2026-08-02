@@ -39,6 +39,7 @@ class FakeRouting:
 class FakeOptimizer:
     def __init__(self):
         self.candidate_counts = []
+        self.attraction_counts = []
 
     def optimize(
         self,
@@ -52,6 +53,9 @@ class FakeOptimizer:
         _start_place=None,
     ):
         self.candidate_counts.append(len(places))
+        self.attraction_counts.append(sum(
+            place.get("item_type") != "meal" for place in places
+        ))
         return places[:max_places]
 
 
@@ -119,7 +123,8 @@ class AssistantServiceTests(unittest.TestCase):
             itinerary[0]["places"][0]["travel_time_minutes"],
             2,
         )
-        self.assertEqual(self.optimizer.candidate_counts[0], 12)
+        self.assertEqual(self.optimizer.attraction_counts[0], 12)
+        self.assertLessEqual(self.optimizer.candidate_counts[0], 24)
 
     def test_changes_distance(self):
         result = self.customize("Không đi quá 8,5 km")

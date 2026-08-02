@@ -41,6 +41,9 @@ def plan_trip(request: UserRequest):
                 {
                     "id": place["id"],
                     "name": place["name"],
+                    "item_type": place["item_type"],
+                    "meal_slot": place["meal_slot"],
+                    "meal_label": place["meal_label"],
                     "region": place["region"],
                     "lat": place["lat"],
                     "lng": place["lng"],

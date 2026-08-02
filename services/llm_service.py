@@ -51,6 +51,8 @@ class LLMService:
                 "places": [
                     {
                         "name": place["name"],
+                        "item_type": place.get("item_type", "attraction"),
+                        "meal_slot": place.get("meal_slot"),
                         "arrival_time": place["arrival_time"],
                         "departure_time": place["departure_time"],
                     }
@@ -62,8 +64,11 @@ class LLMService:
         system_prompt = (
             "Bạn là trợ lý du lịch SoulViet. Trả lời ngắn gọn bằng "
             "tiếng Việt. Không bịa giá, giờ mở cửa hay thời gian đường bộ. "
-            "Hãy giải thích các thay đổi đã áp dụng và nêu cảnh báo nếu "
-            "dữ liệu lịch chưa xác minh."
+            "Lịch trình trong JSON đã được bộ giải ràng buộc kiểm tra; không tự ý "
+            "thêm, xóa, đổi giờ hoặc đổi thứ tự địa điểm. Phân biệt attraction và "
+            "meal: meal không được tính là điểm tham quan. Không cảnh báo chỉ vì "
+            "giờ mở cửa có trạng thái unknown; chỉ nêu schedule_warnings đã có. "
+            "Nếu người dùng yêu cầu thay đổi, mô tả đúng thay đổi backend đã áp dụng."
         )
         user_prompt = {
             "message": message,

@@ -18,6 +18,17 @@ class ItineraryService:
     MAX_OSRM_COORDINATES = 100
     MAX_CANDIDATES_PER_DAY = 12
     START_PLACE_ID = "__route_start__"
+    MEAL_ALTERNATIVES_PER_SLOT = 6
+    MEAL_SLOTS = (
+        {"key": "lunch", "label": "Ăn trưa", "start": 690, "end": 780},
+        {"key": "dinner", "label": "Ăn tối", "start": 1080, "end": 1170},
+    )
+    RESTAURANT_TYPES = {
+        "restaurant", "vietnamese_restaurant", "seafood_restaurant",
+        "fast_food_restaurant", "vegetarian_restaurant", "asian_restaurant",
+        "breakfast_restaurant", "brunch_restaurant", "food_court",
+    }
+    FOOD_FALLBACK_TYPES = {"cafe", "coffee_shop", "bakery"}
 
     def __init__(self, graph=None, routing=None, optimizer=None):
         self.graph = graph or GraphService()
@@ -36,6 +47,81 @@ class ItineraryService:
             },
         )
 
+    @classmethod
+    def _food_priority(cls, place):
+        types = {
+            str(value).strip().casefold()
+            for value in (
+                place.get("type", ""),
+                *place.get("all_types", []),
+                *place.get("types", []),
+            )
+            if value
+        }
+        if types & cls.RESTAURANT_TYPES or any(
+            "restaurant" in value for value in types
+        ):
+            return 0
+        if types & cls.FOOD_FALLBACK_TYPES:
+            return 1
+        return None
+
+    @classmethod
+    def _is_food_place(cls, place):
+        return cls._food_priority(place) is not None
+
+    @staticmethod
+    def _routing_id(place):
+        return place.get("routing_id", place["id"])
+
+    def _meal_candidates(
+        self, restaurants, attractions, route_matrix, weekday,
+        day_start_minutes, day_end_minutes,
+    ):
+        result = []
+        for meal in self.MEAL_SLOTS:
+            if not (
+                day_start_minutes <= meal["start"]
+                and meal["end"] <= day_end_minutes
+            ):
+                continue
+            eligible = []
+            for restaurant in restaurants:
+                schedule = self._day_schedule(restaurant, weekday)
+                windows = visit_start_windows(
+                    schedule, 90, meal["start"], meal["end"]
+                )
+                if not any(start <= meal["start"] <= end for start, end in windows):
+                    continue
+                nearby_minutes = min(
+                    (
+                        route_matrix["metrics"][(place["id"], restaurant["id"])][
+                            "duration_minutes"
+                        ]
+                        for place in attractions
+                    ),
+                    default=0,
+                )
+                eligible.append((
+                    self._food_priority(restaurant),
+                    nearby_minutes,
+                    -restaurant.get("rating", 0),
+                    restaurant,
+                ))
+            eligible.sort(key=lambda item: item[:3])
+            for _, _, _, restaurant in eligible[: self.MEAL_ALTERNATIVES_PER_SLOT]:
+                result.append({
+                    **restaurant,
+                    "id": f"__meal__{meal['key']}__{restaurant['id']}",
+                    "routing_id": restaurant["id"],
+                    "item_type": "meal",
+                    "meal_slot": meal["key"],
+                    "meal_label": meal["label"],
+                    "fixed_start_minutes": meal["start"],
+                    "visit_duration_minutes": 90,
+                })
+        return result
+
     def _evaluate_candidate(
         self,
         candidate,
@@ -51,7 +137,7 @@ class ItineraryService:
         previous = day_places[-1] if day_places else start_place
         metric = (
             route_matrix["metrics"].get(
-                (previous["id"], candidate["id"])
+                (self._routing_id(previous), self._routing_id(candidate))
             )
             if previous
             else {
@@ -70,18 +156,25 @@ class ItineraryService:
         earliest = current_minutes + travel_minutes
         visit_minutes = candidate.get("visit_duration_minutes", 90)
         day_schedule = self._day_schedule(candidate, weekday)
-        slot = find_visit_slot(
-            day_schedule,
-            earliest,
-            visit_minutes,
-            day_end_minutes,
-        )
+        fixed_start = candidate.get("fixed_start_minutes")
+        if fixed_start is not None:
+            valid_windows = visit_start_windows(
+                day_schedule, visit_minutes, fixed_start,
+                fixed_start + visit_minutes,
+            )
+            slot = (
+                (fixed_start, fixed_start + visit_minutes)
+                if earliest <= fixed_start and valid_windows
+                else None
+            )
+        else:
+            slot = find_visit_slot(
+                day_schedule, earliest, visit_minutes, day_end_minutes
+            )
         if slot is None:
             return None
 
         warnings = []
-        if day_schedule.get("status") == "unknown":
-            warnings.append("Giờ mở cửa chưa được xác minh")
         if day_schedule.get("needs_review") or candidate.get(
             "opening_hours_needs_review"
         ):
@@ -153,6 +246,10 @@ class ItineraryService:
         day_schedule = evaluation["day_schedule"]
         return {
             **place,
+            "id": place.get("routing_id", place["id"]),
+            "item_type": place.get("item_type", "attraction"),
+            "meal_slot": place.get("meal_slot"),
+            "meal_label": place.get("meal_label"),
             "arrival_time": minutes_to_time(
                 evaluation["arrival_minutes"]
             ),
@@ -181,6 +278,7 @@ class ItineraryService:
     def _build_day(
         self,
         remaining,
+        restaurants,
         scores,
         max_places,
         max_daily_distance,
@@ -201,7 +299,7 @@ class ItineraryService:
             place["id"]: self._day_schedule(place, weekday)
             for place in remaining
         }
-        optimization_candidates = [
+        attraction_candidates = [
             place
             for place in remaining
             if visit_start_windows(
@@ -211,6 +309,15 @@ class ItineraryService:
                 day_end_minutes,
             )
         ][: self.MAX_CANDIDATES_PER_DAY]
+        meal_candidates = self._meal_candidates(
+            restaurants, attraction_candidates, route_matrix, weekday,
+            day_start_minutes, day_end_minutes,
+        )
+        optimization_candidates = [*attraction_candidates, *meal_candidates]
+        all_day_schedules.update({
+            place["id"]: self._day_schedule(place, weekday)
+            for place in meal_candidates
+        })
         day_schedules = {
             place["id"]: all_day_schedules[place["id"]]
             for place in optimization_candidates
@@ -244,7 +351,8 @@ class ItineraryService:
                     break
                 day_places.append(place)
                 timeline.append(self._timeline_item(selection))
-                remaining.remove(place)
+                if place.get("item_type") != "meal":
+                    remaining.remove(place)
                 distance_used += selection["distance"]
                 travel_minutes_used += selection["travel_minutes"]
                 current_minutes = selection["departure_minutes"]
@@ -302,13 +410,15 @@ class ItineraryService:
                 if start_place
                 else None
             ),
+            "_used_restaurant_ids": [
+                self._routing_id(place)
+                for place in day_places
+                if place.get("item_type") == "meal"
+            ],
         }
 
     def build(self, user):
         filtered = self.graph.filter_places(user)
-        budget_limit = BudgetService.trip_limit(
-            user.budget_level, user.duration
-        )
         scored = [
             (place, self.graph.score_place(place, user))
             for place in filtered
@@ -331,28 +441,36 @@ class ItineraryService:
         available_osrm_slots = self.MAX_OSRM_COORDINATES - int(
             start_place is not None
         )
-        candidate_limit = min(
-            user.duration * self.MAX_CANDIDATES_PER_DAY,
-            len(scored),
-            available_osrm_slots,
-        )
-        candidates = [
+        all_candidates = [
             {
                 **place,
                 **BudgetService.estimate_place(place, user.budget_level),
                 "recommendation_score": score["total"],
                 "score_breakdown": score,
             }
-            for place, score in scored[:candidate_limit]
+            for place, score in scored
         ]
+        attraction_limit = min(
+            user.duration * self.MAX_CANDIDATES_PER_DAY,
+            available_osrm_slots,
+        )
+        candidates = [
+            place for place in all_candidates if not self._is_food_place(place)
+        ][:attraction_limit]
+        restaurant_limit = max(
+            0, available_osrm_slots - len(candidates)
+        )
+        restaurants = [
+            place for place in all_candidates if self._is_food_place(place)
+        ][:restaurant_limit]
         scores = {
             place["id"]: score["total"]
-            for place, score in scored[:candidate_limit]
+            for place, score in scored
         }
         routing_places = (
-            [start_place, *candidates]
+            [start_place, *candidates, *restaurants]
             if start_place
-            else candidates
+            else [*candidates, *restaurants]
         )
         route_matrix = self.routing.build_matrix(routing_places)
 
@@ -368,6 +486,7 @@ class ItineraryService:
             days.append(
                 self._build_day(
                     candidates,
+                    restaurants,
                     scores,
                     user.max_places_per_day,
                     user.max_daily_distance_km,
@@ -378,20 +497,16 @@ class ItineraryService:
                     start_place,
                 )
             )
-        running_spend = 0
+            used_restaurants = set(days[-1].pop("_used_restaurant_ids"))
+            restaurants[:] = [
+                place for place in restaurants
+                if place["id"] not in used_restaurants
+            ]
         for day in days:
-            accepted = []
-            for place in day["places"]:
-                expected = place["expected_spend"]
-                if running_spend + expected > budget_limit:
-                    continue
-                accepted.append(place)
-                running_spend += expected
-            day["places"] = accepted
             day["estimated_spend_min"] = sum(
-                place["spend_min"] for place in accepted
+                place["spend_min"] for place in day["places"]
             )
             day["estimated_spend_max"] = sum(
-                place["spend_max"] for place in accepted
+                place["spend_max"] for place in day["places"]
             )
         return days
