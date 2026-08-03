@@ -10,6 +10,8 @@ class RouteOptimizer:
 
     DROP_PENALTY = 10_000_000
     MEAL_DROP_PENALTY = 100_000_000
+    WAIT_COST_PER_MINUTE = 10
+    PREFERRED_TIME_PENALTY = 10_000
 
     def __init__(self, time_limit_milliseconds=None):
         self.time_limit_milliseconds = int(
@@ -57,7 +59,9 @@ class RouteOptimizer:
         day_start_minutes,
         day_end_minutes,
         start_place=None,
+        required_place_ids=None,
     ):
+        required_place_ids = set(required_place_ids or [])
         feasible = [
             place
             for place in places
@@ -125,6 +129,9 @@ class RouteOptimizer:
             "Time",
         )
         time_dimension = routing.GetDimensionOrDie("Time")
+        time_dimension.SetSlackCostCoefficientForAllVehicles(
+            self.WAIT_COST_PER_MINUTE
+        )
 
         def count_callback(from_index):
             node = manager.IndexToNode(from_index)
@@ -172,6 +179,17 @@ class RouteOptimizer:
                 if gap_start <= gap_end:
                     cumul.RemoveInterval(gap_start, gap_end)
 
+            preferred_start = place.get("preferred_start_minutes")
+            if preferred_start is not None:
+                relative_preferred_start = max(
+                    0, preferred_start - day_start_minutes
+                )
+                time_dimension.SetCumulVarSoftLowerBound(
+                    index,
+                    relative_preferred_start,
+                    self.PREFERRED_TIME_PENALTY,
+                )
+
             if place.get("item_type") == "meal":
                 meal_indices.setdefault(place["meal_slot"], []).append(index)
                 restaurant_indices.setdefault(
@@ -179,10 +197,11 @@ class RouteOptimizer:
                 ).append(index)
             else:
                 query_priority = max(0, int(place.get("query_priority", 0)))
-                routing.AddDisjunction(
-                    [index],
-                    self.DROP_PENALTY + query_priority * 100_000,
-                )
+                if place["id"] not in required_place_ids:
+                    routing.AddDisjunction(
+                        [index],
+                        self.DROP_PENALTY + query_priority * 100_000,
+                    )
 
         for indices in meal_indices.values():
             routing.AddDisjunction(indices, self.MEAL_DROP_PENALTY, 1)
@@ -211,6 +230,12 @@ class RouteOptimizer:
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
             if node >= first_place_node:
-                ordered.append(nodes[node])
+                ordered.append({
+                    **nodes[node],
+                    "_optimized_arrival_minutes": (
+                        day_start_minutes
+                        + solution.Value(time_dimension.CumulVar(index))
+                    ),
+                })
             index = solution.Value(routing.NextVar(index))
         return ordered

@@ -2,7 +2,7 @@ import unittest
 from datetime import date, time
 from typing import get_args
 
-from models.user_request import UserRequest
+from models.user_request import CategoryConstraint, UserRequest
 from services.itinerary_validator import ItineraryValidator
 
 
@@ -44,6 +44,10 @@ class ItineraryValidatorTests(unittest.TestCase):
         self.assertTrue(report["valid"])
         self.assertEqual(report["metrics"]["attraction_count"], 2)
         self.assertEqual(report["metrics"]["meal_count"], 1)
+        self.assertEqual(report["metrics"]["max_idle_gap_minutes"], 150)
+        self.assertEqual(report["metrics"]["total_idle_minutes"], 160)
+        self.assertEqual(report["metrics"]["tail_gap_minutes_by_day"], [420])
+        self.assertIn("day_1:large_idle_gap", report["soft_warnings"])
 
     def test_rejects_duplicates_distance_and_timeline_conflicts(self):
         itinerary = [{
@@ -84,6 +88,26 @@ class ItineraryValidatorTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["metrics"]["duplicate_brand_count"], 1)
+
+    def test_reports_missing_required_place_and_category_minimum(self):
+        request = self.request().model_copy(update={
+            "required_place_ids": ["required"],
+            "category_constraints": [CategoryConstraint(
+                category="beach", min_count=1, max_count=1
+            )],
+        })
+        itinerary = [{
+            "total_distance_km": 1,
+            "places": [self.item("other", "08:00", "09:00")],
+        }]
+
+        report = ItineraryValidator.validate(itinerary, request)
+
+        self.assertEqual(report["status"], "partial")
+        self.assertIn("missing_required_places", report["quality_violations"])
+        self.assertIn(
+            "category_constraints_unmet", report["quality_violations"]
+        )
 
 
 if __name__ == "__main__":

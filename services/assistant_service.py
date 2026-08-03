@@ -7,15 +7,36 @@ from models.assistant_intent import (
     GraphQueryPlan,
     PlaceOperation,
 )
-from models.user_request import RegionName, UserRequest, VibeName
+from models.user_request import (
+    CategoryConstraint,
+    RegionName,
+    UserRequest,
+    VibeName,
+)
 from services.graph_query_service import GraphQueryService
 from services.itinerary_service import ItineraryService
 from services.itinerary_validator import ItineraryValidator
 from services.llm_service import LLMService
+from services.place_requirement_service import PlaceRequirementService
+from utils.place_matching import normalize_command_text, normalize_text
 
 
 class AssistantService:
-    MAX_QUERY_ATTEMPTS = 2
+    MAX_QUERY_ATTEMPTS = 5
+
+    CATEGORY_ALIASES = {
+        "bai bien": "Biển & Hoạt động dưới nước",
+        "bien": "Biển & Hoạt động dưới nước",
+        "van hoa": "Văn hóa & Lịch sử",
+        "lich su": "Văn hóa & Lịch sử",
+        "thien nhien": "Thiên nhiên & Ngắm cảnh",
+        "thu gian": "Thư giãn & Chăm sóc sức khỏe",
+    }
+    EXCLUDED_TYPE_ALIASES = {
+        "chua": "place_of_worship",
+        "den": "place_of_worship",
+        "tam linh": "place_of_worship",
+    }
 
     def __init__(
         self,
@@ -30,6 +51,33 @@ class AssistantService:
             self.itinerary.graph
         )
         self.validator = validator or ItineraryValidator()
+        self.place_requirements = PlaceRequirementService(
+            self.itinerary.graph
+        )
+
+    @staticmethod
+    def _normalize_text(value):
+        return normalize_text(value)
+
+    def _named_places_in_message(self, message):
+        normalized = self._normalize_text(message)
+        matches = []
+        for place in self.itinerary.graph.get_all_places():
+            name = self._normalize_text(place.get("name"))
+            if len(name) >= 4 and re.search(
+                rf"(?:^|\s){re.escape(name)}(?:$|\s)", normalized
+            ):
+                matches.append(place)
+        matches.sort(key=lambda place: len(place.get("name", "")), reverse=True)
+        selected = []
+        selected_names = []
+        for place in matches:
+            normalized_name = self._normalize_text(place.get("name"))
+            if any(normalized_name in name for name in selected_names):
+                continue
+            selected.append(place)
+            selected_names.append(normalized_name)
+        return selected
 
     def _extract_adjustments(self, message, current_request):
         normalized = message.casefold()
@@ -127,52 +175,154 @@ class AssistantService:
                 applied.append(f"vibe {vibe}")
                 break
 
+        normalized_ascii = normalize_command_text(message)
         remove_requested = re.search(
-            r"\b(?:bỏ|xóa|loại|không\s+(?:đi|ghé))\b",
-            normalized,
+            r"\b(?:bo|xoa|loai|khong\s+(?:di|ghe))\b",
+            normalized_ascii,
         )
         if remove_requested:
             excluded = set(current_request.excluded_place_ids)
             candidates = [
                 place
-                for place in self.itinerary.graph.get_all_places()
+                for place in self._named_places_in_message(message)
                 if place["region"] == current_request.region
-                and place["name"].casefold() in normalized
             ]
-            candidates.sort(key=lambda place: len(place["name"]), reverse=True)
-            if candidates:
-                selected = candidates[0]
+            for selected in candidates:
                 excluded.add(selected["id"])
-                updates["excluded_place_ids"] = sorted(excluded)
                 applied.append(f"bỏ địa điểm {selected['name']}")
+            if candidates:
+                updates["excluded_place_ids"] = sorted(excluded)
+
+        add_requested = re.search(
+            r"\b(?:them|ghe|bat buoc|nhat dinh|phai di|muon di)\b",
+            normalized_ascii,
+        )
+        if add_requested:
+            required = set(current_request.required_place_ids)
+            candidates = [
+                place
+                for place in self._named_places_in_message(message)
+                if place["region"] == current_request.region
+            ]
+            for selected in candidates:
+                required.add(selected["id"])
+                applied.append(f"thêm địa điểm {selected['name']}")
+            if candidates:
+                updates["required_place_ids"] = sorted(required)
 
         return updates, applied
 
-    @staticmethod
-    def _fallback_graph_query(message):
-        normalized = message.casefold()
-        category_aliases = {
-            "biển": "Biển & Hoạt động dưới nước",
-            "văn hóa": "Văn hóa & Lịch sử",
-            "lịch sử": "Văn hóa & Lịch sử",
-            "thiên nhiên": "Thiên nhiên & Ngắm cảnh",
-            "thư giãn": "Thư giãn & Chăm sóc sức khỏe",
-        }
+    @classmethod
+    def _fallback_graph_query(cls, message):
+        normalized = normalize_command_text(message)
         keywords = [
-            keyword for keyword in category_aliases if keyword in normalized
+            alias for alias in cls.CATEGORY_ALIASES
+            if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", normalized)
         ]
-        categories = sorted({category_aliases[item] for item in keywords})
+        categories = sorted({cls.CATEGORY_ALIASES[item] for item in keywords})
         nearby = any(
             phrase in normalized
-            for phrase in ("ít di chuyển", "gần nhau", "gần hơn", "quanh đây")
+            for phrase in ("it di chuyen", "gan nhau", "gan hon", "quanh day")
         )
+
+        excluded_types = []
+        for alias, place_type in cls.EXCLUDED_TYPE_ALIASES.items():
+            pattern = (
+                rf"(?:khong(?:\s+muon)?\s+(?:di|ghe)|bo\s+cac|loai\s+(?:bo\s+)?(?:cac\s+)?)"
+                rf"\s+{re.escape(alias)}(?:\s+nao)?(?:$|[,.]|\s+(?:va|nhung|khoi))"
+            )
+            if re.search(pattern, normalized):
+                excluded_types.append(place_type)
+
+        constraints = []
+        for alias, category in cls.CATEGORY_ALIASES.items():
+            match = re.search(
+                rf"(?:(dung|it nhat|toi da|khong qua|khoang)\s+)?"
+                rf"(\d{{1,2}})\s+(?:dia diem\s+)?{re.escape(alias)}(?:$|\s)",
+                normalized,
+            )
+            if not match:
+                continue
+            qualifier = match.group(1) or "dung"
+            count = int(match.group(2))
+            if qualifier == "khoang":
+                constraint = CategoryConstraint(
+                    category=category, target_count=count, mode="soft"
+                )
+            elif qualifier == "it nhat":
+                constraint = CategoryConstraint(
+                    category=category, min_count=count
+                )
+            elif qualifier in {"toi da", "khong qua"}:
+                constraint = CategoryConstraint(
+                    category=category, max_count=count
+                )
+            else:
+                constraint = CategoryConstraint(
+                    category=category, min_count=count, max_count=count
+                )
+            constraints.append(constraint)
+
+        if categories and not constraints and not any(
+            phrase in normalized
+            for phrase in ("chi muon", "chi di", "toan", "tat ca")
+        ):
+            constraints = [
+                CategoryConstraint(
+                    category=category,
+                    min_count=1,
+                    target_count=1,
+                    mode="hard",
+                )
+                for category in categories
+            ]
+
         return GraphQueryPlan(
             keywords=keywords,
             activity_categories=categories,
+            excluded_types=sorted(set(excluded_types)),
+            category_constraints=constraints,
             expand_near=nearby,
             near_hops=1 if nearby else 0,
             include_similar=bool(keywords),
         )
+
+    @staticmethod
+    def _merge_query_plans(primary, fallback):
+        def merged_values(first, second):
+            return list(dict.fromkeys([*first, *second]))
+
+        constraints = {
+            rule.category.casefold(): rule
+            for rule in primary.category_constraints
+        }
+        for rule in fallback.category_constraints:
+            constraints.setdefault(rule.category.casefold(), rule)
+        return primary.model_copy(update={
+            "keywords": merged_values(primary.keywords, fallback.keywords),
+            "activity_categories": merged_values(
+                primary.activity_categories, fallback.activity_categories
+            ),
+            "required_place_names": merged_values(
+                primary.required_place_names, fallback.required_place_names
+            ),
+            "excluded_place_names": merged_values(
+                primary.excluded_place_names, fallback.excluded_place_names
+            ),
+            "excluded_types": merged_values(
+                primary.excluded_types, fallback.excluded_types
+            ),
+            "excluded_activity_categories": merged_values(
+                primary.excluded_activity_categories,
+                fallback.excluded_activity_categories,
+            ),
+            "category_constraints": list(constraints.values()),
+            "expand_near": primary.expand_near or fallback.expand_near,
+            "near_hops": max(primary.near_hops, fallback.near_hops),
+            "include_similar": (
+                primary.include_similar or fallback.include_similar
+            ),
+        })
 
     @staticmethod
     def _fallback_meal_preferences(message):
@@ -351,6 +501,25 @@ class AssistantService:
             assistant_request.message,
             assistant_request.current_request,
         )
+        required_mentions = self.place_requirements.resolve(
+            assistant_request.message,
+            assistant_request.current_request.region,
+        )
+        if required_mentions:
+            mentioned_required_ids = {
+                place["id"] for place in required_mentions
+            }
+            rule_updates["required_place_ids"] = sorted({
+                *assistant_request.current_request.required_place_ids,
+                *rule_updates.get("required_place_ids", []),
+                *mentioned_required_ids,
+            })
+            for place in required_mentions:
+                label = f"thêm địa điểm {place['name']}"
+                if label not in applied:
+                    applied.append(label)
+        else:
+            mentioned_required_ids = set()
         fallback_query = self._fallback_graph_query(
             assistant_request.message
         )
@@ -473,9 +642,68 @@ class AssistantService:
         raw_request.update(updates)
         updated_request = UserRequest.model_validate(raw_request)
 
-        query = parsed_intent.graph_query
-        if not query.is_active() and fallback_query.is_active():
-            query = fallback_query
+        query = self._merge_query_plans(
+            parsed_intent.graph_query, fallback_query
+        )
+        persistent_constraints = {
+            rule.category.casefold(): rule
+            for rule in updated_request.category_constraints
+        }
+        for rule in query.category_constraints:
+            persistent_constraints[rule.category.casefold()] = rule
+        query = query.model_copy(update={
+            "category_constraints": list(persistent_constraints.values())
+        })
+        requested_candidates = (
+            updated_request.duration * updated_request.max_places_per_day
+        )
+        query = query.model_copy(update={
+            "candidate_limit": min(
+                87,
+                max(query.candidate_limit, (requested_candidates * 5 + 1) // 2),
+            )
+        })
+
+        resolved = self.graph_query.resolve_constraints(updated_request, query)
+        required_ids = set(updated_request.required_place_ids)
+        required_ids.update(resolved["required_place_ids"])
+        excluded_ids = set(updated_request.excluded_place_ids)
+        excluded_ids.update(resolved["excluded_place_ids"])
+        required_ids.difference_update(excluded_ids)
+        anchor_ids = list(dict.fromkeys([
+            *mentioned_required_ids,
+            *resolved["required_place_ids"],
+        ]))[:5]
+        if anchor_ids:
+            query = query.model_copy(update={
+                "seed_place_ids": list(dict.fromkeys([
+                    *query.seed_place_ids,
+                    *anchor_ids,
+                ]))[:5],
+                "include_similar": True,
+                "expand_near": True,
+                "near_hops": 1,
+            })
+        constraint_map = {
+            rule.category.casefold(): rule
+            for rule in updated_request.category_constraints
+        }
+        for rule in query.category_constraints:
+            constraint_map[rule.category.casefold()] = rule
+        updated_request = UserRequest.model_validate({
+            **updated_request.model_dump(),
+            "required_place_ids": sorted(required_ids),
+            "excluded_place_ids": sorted(excluded_ids),
+            "excluded_place_types": sorted(set([
+                *updated_request.excluded_place_types,
+                *query.excluded_types,
+            ])),
+            "excluded_activity_categories": sorted(set([
+                *updated_request.excluded_activity_categories,
+                *query.excluded_activity_categories,
+            ])),
+            "category_constraints": list(constraint_map.values()),
+        })
         if query.activity_categories and "preferred_activities" not in updates:
             updated_request = UserRequest.model_validate({
                 **updated_request.model_dump(),
@@ -508,15 +736,66 @@ class AssistantService:
         )
 
         query_metadata = None
+        attempt_history = []
         itinerary = []
         validation_report = None
         working_query = query
+        protected_seed_ids = list(query.seed_place_ids)
+        semantic_refinement = None
+        semantic_classifier_used = False
+        candidate_semantic_categories = {}
         for attempt in range(self.MAX_QUERY_ATTEMPTS):
             candidate_ids = retained_attraction_ids
             if working_query.is_active():
                 query_metadata = self.graph_query.search(
                     updated_request, working_query
                 )
+                has_semantic_request = bool(
+                    working_query.keywords
+                    or working_query.types
+                    or working_query.activity_categories
+                    or working_query.vibes
+                )
+                if (
+                    has_semantic_request
+                    and not semantic_classifier_used
+                    and query_metadata.get("semantic_match_count", 0) == 0
+                    and hasattr(self.llm, "classify_place_matches")
+                ):
+                    semantic_classifier_used = True
+                    shortlist = self.graph_query.semantic_candidates(
+                        updated_request, working_query, limit=30
+                    )
+                    semantic_refinement = self.llm.classify_place_matches(
+                        assistant_request.message, shortlist
+                    )
+                    matched_ids = list(dict.fromkeys(
+                        (semantic_refinement or {}).get(
+                            "matched_place_ids", []
+                        )
+                    ))[:5]
+                    if matched_ids:
+                        semantic_labels = list(dict.fromkeys([
+                            *working_query.activity_categories,
+                            *(
+                                rule.category
+                                for rule in working_query.category_constraints
+                            ),
+                        ]))
+                        for place_id in matched_ids:
+                            candidate_semantic_categories[place_id] = (
+                                semantic_labels
+                            )
+                        protected_seed_ids = list(dict.fromkeys([
+                            *protected_seed_ids,
+                            *matched_ids,
+                        ]))[:5]
+                        working_query = working_query.model_copy(update={
+                            "seed_place_ids": protected_seed_ids,
+                        })
+                        query_metadata = self.graph_query.search(
+                            updated_request, working_query
+                        )
                 candidate_ids = query_metadata["candidate_ids"]
                 query_metadata["attempts"] = attempt + 1
                 query_metadata["query"] = working_query.model_dump(
@@ -539,10 +818,23 @@ class AssistantService:
                     )
                 ),
                 meal_preferences=meal_preferences,
+                candidate_semantic_categories=(
+                    candidate_semantic_categories
+                ),
             )
             validation_report = self.validator.validate(
                 itinerary, updated_request
             )
+            if resolved["unresolved_required_place_names"]:
+                validation_report["acceptable"] = False
+                validation_report["status"] = "partial"
+                validation_report["quality_violations"] = sorted(set([
+                    *validation_report["quality_violations"],
+                    "required_place_not_found",
+                ]))
+                validation_report["metrics"][
+                    "unresolved_required_place_names"
+                ] = resolved["unresolved_required_place_names"]
             if requested_place_target:
                 max_day_attractions = max(
                     (
@@ -564,12 +856,23 @@ class AssistantService:
                         *validation_report["quality_violations"],
                         "requested_place_count_unmet",
                     ]))
+            attempt_history.append({
+                "attempt": attempt + 1,
+                "candidate_count": (
+                    query_metadata.get("candidate_count")
+                    if query_metadata
+                    else None
+                ),
+                "status": validation_report.get("status"),
+                "quality_violations": validation_report.get(
+                    "quality_violations", []
+                ),
+                "query": working_query.model_dump(mode="json"),
+            })
             if (
                 validation_report["valid"]
                 and validation_report.get("acceptable", True)
             ):
-                break
-            if not working_query.is_active():
                 break
             revised_query = None
             if hasattr(self.llm, "revise_query"):
@@ -580,14 +883,45 @@ class AssistantService:
                     itinerary,
                     validation_report,
                 )
-            working_query = revised_query or working_query.model_copy(
-                update={
-                    "candidate_limit": min(
-                        24, working_query.candidate_limit + 4
-                    ),
+            base_query = revised_query or working_query
+            update = {
+                "seed_place_ids": protected_seed_ids,
+                "required_place_names": query.required_place_names,
+                "excluded_place_names": query.excluded_place_names,
+                "excluded_types": query.excluded_types,
+                "excluded_activity_categories": (
+                    query.excluded_activity_categories
+                ),
+                "category_constraints": query.category_constraints,
+                "candidate_limit": min(
+                    90, max(base_query.candidate_limit, query.candidate_limit) + 8
+                ),
+            }
+            if attempt == 0:
+                update["include_similar"] = True
+            elif attempt == 1:
+                update["include_similar"] = True
+            elif attempt == 2:
+                update.update({"expand_near": True, "near_hops": 1})
+            elif attempt == 3:
+                update.update({
+                    "keywords": [],
+                    "types": [],
+                    "activity_categories": [],
+                    "vibes": [],
                     "include_similar": True,
-                }
-            )
+                })
+            working_query = base_query.model_copy(update=update)
+
+        if query_metadata is None:
+            query_metadata = {}
+        query_metadata.update({
+            "attempts": len(attempt_history),
+            "attempt_history": attempt_history,
+            "semantic_classifier_used": semantic_classifier_used,
+            "semantic_refinement": semantic_refinement,
+            **resolved,
+        })
 
         llm_result = self._explain(
             assistant_request.message,

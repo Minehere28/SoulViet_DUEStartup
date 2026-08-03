@@ -22,6 +22,30 @@ RegionName = Literal[
 BudgetLevel = Literal["economy", "standard", "premium"]
 
 
+class CategoryConstraint(BaseModel):
+    """Trip-wide cardinality rule for one activity category."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category: str = Field(min_length=1, max_length=120)
+    min_count: int = Field(default=0, ge=0, le=50)
+    max_count: int | None = Field(default=None, ge=0, le=50)
+    target_count: int | None = Field(default=None, ge=0, le=50)
+    mode: Literal["hard", "soft"] = "hard"
+
+    @model_validator(mode="after")
+    def validate_counts(self):
+        if self.max_count is not None and self.max_count < self.min_count:
+            raise ValueError("max_count must be greater than or equal to min_count")
+        if (
+            self.target_count is not None
+            and self.max_count is not None
+            and self.target_count > self.max_count
+        ):
+            raise ValueError("target_count must not exceed max_count")
+        return self
+
+
 class UserRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -77,6 +101,26 @@ class UserRequest(BaseModel):
         default_factory=list,
         max_length=50,
         description="Place IDs explicitly removed by the user.",
+    )
+    required_place_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Place IDs that must appear when the trip is feasible.",
+    )
+    excluded_place_types: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Place types forbidden by the user.",
+    )
+    excluded_activity_categories: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Activity categories forbidden by the user.",
+    )
+    category_constraints: list[CategoryConstraint] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Trip-wide hard or soft category count constraints.",
     )
     start_date: date = Field(
         description="Ngày bắt đầu hành trình theo định dạng YYYY-MM-DD.",

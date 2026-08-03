@@ -48,6 +48,31 @@ class LLMServiceTests(unittest.TestCase):
 
         self.assertIsNone(intent)
 
+    def test_semantic_classifier_keeps_only_known_confident_ids(self):
+        response = {
+            "matched_place_ids": ["beach-by-name", "low", "invented"],
+            "confidence_by_id": {
+                "beach-by-name": 0.91,
+                "low": 0.4,
+                "invented": 0.99,
+            },
+            "reason_by_id": {
+                "beach-by-name": "Tên và mô tả thể hiện đây là bãi biển",
+            },
+        }
+        self.service._complete = lambda *_args, **_kwargs: (
+            json.dumps(response, ensure_ascii=False),
+            {},
+        )
+
+        result = self.service.classify_place_matches("muốn đi biển", [
+            {"id": "beach-by-name", "name": "Bãi X"},
+            {"id": "low", "name": "Điểm Y"},
+        ])
+
+        self.assertEqual(result["matched_place_ids"], ["beach-by-name"])
+        self.assertEqual(result["confidence_by_id"], {"beach-by-name": 0.91})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,21 @@ Mặc định:
 - Output: `graph.pt`
 - Ngưỡng cạnh `NEAR`: 2 km
 
+## Chạy benchmark gợi ý
+
+Benchmark dùng graph thật và ma trận routing cố định để kết quả không phụ
+thuộc tình trạng OSRM public:
+
+```powershell
+python -m scripts.benchmark_recommendation
+```
+
+Có thể kiểm tra lịch dài hơn, tối đa 14 ngày:
+
+```powershell
+python -m scripts.benchmark_recommendation --days 14
+```
+
 ## Import Neo4j
 
 Upsert dữ liệu:

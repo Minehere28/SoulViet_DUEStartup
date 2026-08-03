@@ -4,6 +4,7 @@ import unicodedata
 import torch
 
 from services.scoring_service import ScoringService
+from utils.place_matching import place_categories, place_types
 
 
 class GraphService:
@@ -227,10 +228,27 @@ class GraphService:
     def filter_places(self, user):
         result = []
         excluded_ids = set(user.excluded_place_ids)
+        required_ids = set(getattr(user, "required_place_ids", []))
+        excluded_types = {
+            str(value).strip().casefold()
+            for value in getattr(user, "excluded_place_types", [])
+            if str(value).strip()
+        }
+        excluded_categories = {
+            str(value).strip().casefold()
+            for value in getattr(user, "excluded_activity_categories", [])
+            if str(value).strip()
+        }
         for place in self.nodes.values():
             if place["id"] in excluded_ids:
                 continue
-            if place["rating"] < 4:
+            current_types = place_types(place)
+            current_categories = place_categories(place)
+            if excluded_types & current_types:
+                continue
+            if excluded_categories & current_categories:
+                continue
+            if place["rating"] < 4 and place["id"] not in required_ids:
                 continue
             if place["region"] != user.region:
                 continue

@@ -107,9 +107,19 @@ class LLMService:
             "đúng JSON Schema được cung cấp, không markdown, không giải thích. "
             "Phân loại intent: question nếu người dùng chỉ hỏi về lịch hiện tại; "
             "modify_itinerary nếu họ muốn thay đổi; unknown nếu thiếu thông tin. "
-            "Không tạo ID địa điểm. Chỉ dùng place_id có trong current_itinerary. "
-            "Dùng graph_query để mô tả sở thích tìm kiếm; NEAR tối đa một hop, "
-            "candidate_limit tối đa 24. Tách sở thích ăn uống vào meal_preferences; "
+            "Không tạo ID địa điểm. Chỉ dùng place_id có trong current_itinerary; "
+            "với điểm mới hãy ghi tên thật vào graph_query.required_place_names. "
+            "Các cách nói 'thêm X', 'cần có X', 'muốn có X', 'nhất định ghé X' "
+            "đều là yêu cầu bắt buộc: đưa X vào required_place_names, không chỉ "
+            "đưa từ khóa chung của X vào activity_categories. "
+            "Dùng graph_query để tách sở thích mềm, loại địa điểm/type/category và "
+            "category_constraints. Dùng keywords cho tín hiệu trong tên/mô tả, "
+            "types cho loại địa điểm, activity_categories cho nhóm hoạt động và "
+            "vibes cho không khí. Một sở thích tự nhiên như 'muốn đi biển' là "
+            "target mềm một điểm, không phải bắt toàn bộ lịch đều là biển. "
+            "Phân biệt đúng, ít nhất, tối đa và khoảng; "
+            "NEAR tối đa một hop, candidate_limit tối đa 90. "
+            "Tách sở thích ăn uống vào meal_preferences; "
             "nếu chỉ đổi bữa ăn hoặc thêm cà phê thì đặt scope=meals_only. "
             "Nếu câu lệnh mơ hồ, đặt "
             "needs_clarification=true và viết một câu hỏi ngắn."
@@ -162,7 +172,8 @@ class LLMService:
             "Bạn đang sửa graph query cho SoulViet sau một lần lập lịch chưa đạt. "
             "Chỉ trả về một JSON object đúng GraphQueryPlan schema, không markdown. "
             "Không thay đổi yêu cầu cứng của người dùng, không tạo place ID, NEAR "
-            "tối đa một hop và candidate_limit tối đa 24."
+            "tối đa một hop và candidate_limit tối đa 90. Không được xóa hoặc nới "
+            "required places, exclusions hay hard category constraints."
         )
         payload = {
             "message": message,
@@ -184,9 +195,7 @@ class LLMService:
                 temperature=0,
                 max_tokens=600,
             )
-            return GraphQueryPlan.model_validate(
-                self._json_object(content)
-            )
+            return GraphQueryPlan.model_validate(self._json_object(content))
         except (
             HTTPError,
             URLError,
@@ -194,6 +203,65 @@ class LLMService:
             json.JSONDecodeError,
             KeyError,
             IndexError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+    def classify_place_matches(self, message, candidates):
+        """Classify a bounded candidate list without allowing invented IDs."""
+        if not self.api_key or not candidates:
+            return None
+        allowed_ids = {item["id"] for item in candidates}
+        system_prompt = (
+            "Bạn kiểm tra candidate địa điểm có thỏa yêu cầu du lịch hay không. "
+            "Đánh giá đồng thời tên, type, activities, activity_categories, vibes "
+            "và description; không chỉ dựa vào một tag. Chỉ trả JSON object gồm "
+            "matched_place_ids (list ID), confidence_by_id (object ID->0..1) và "
+            "reason_by_id (object ID->lý do ngắn). Không tạo ID ngoài danh sách."
+        )
+        payload = {
+            "message": message,
+            "candidates": candidates,
+        }
+        try:
+            content, _ = self._complete(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(payload, ensure_ascii=False),
+                    },
+                ],
+                temperature=0,
+                max_tokens=600,
+            )
+            result = self._json_object(content)
+            confidence = result.get("confidence_by_id", {})
+            matched_ids = [
+                place_id
+                for place_id in result.get("matched_place_ids", [])
+                if place_id in allowed_ids
+                and float(confidence.get(place_id, 0)) >= 0.65
+            ]
+            reasons = result.get("reason_by_id", {})
+            return {
+                "matched_place_ids": list(dict.fromkeys(matched_ids)),
+                "confidence_by_id": {
+                    place_id: float(confidence[place_id])
+                    for place_id in matched_ids
+                },
+                "reason_by_id": {
+                    place_id: str(reasons.get(place_id, ""))[:200]
+                    for place_id in matched_ids
+                },
+            }
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            json.JSONDecodeError,
+            KeyError,
             TypeError,
             ValueError,
         ):

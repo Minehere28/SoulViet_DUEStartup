@@ -3,7 +3,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from models.user_request import BudgetLevel, RegionName, VibeName
+from models.user_request import (
+    BudgetLevel,
+    CategoryConstraint,
+    RegionName,
+    VibeName,
+)
 
 
 class RequestUpdates(BaseModel):
@@ -29,11 +34,20 @@ class GraphQueryPlan(BaseModel):
     types: list[str] = Field(default_factory=list, max_length=10)
     activity_categories: list[str] = Field(default_factory=list, max_length=10)
     vibes: list[str] = Field(default_factory=list, max_length=5)
+    required_place_names: list[str] = Field(default_factory=list, max_length=10)
+    excluded_place_names: list[str] = Field(default_factory=list, max_length=10)
+    excluded_types: list[str] = Field(default_factory=list, max_length=20)
+    excluded_activity_categories: list[str] = Field(
+        default_factory=list, max_length=20
+    )
+    category_constraints: list[CategoryConstraint] = Field(
+        default_factory=list, max_length=10
+    )
     minimum_rating: float = Field(default=4.0, ge=0, le=5)
     expand_near: bool = False
     near_hops: int = Field(default=0, ge=0, le=1)
     include_similar: bool = False
-    candidate_limit: int = Field(default=20, ge=5, le=24)
+    candidate_limit: int = Field(default=20, ge=5, le=90)
 
     def is_active(self):
         return bool(
@@ -42,6 +56,11 @@ class GraphQueryPlan(BaseModel):
             or self.types
             or self.activity_categories
             or self.vibes
+            or self.required_place_names
+            or self.excluded_place_names
+            or self.excluded_types
+            or self.excluded_activity_categories
+            or self.category_constraints
             or self.expand_near
             or self.include_similar
         )

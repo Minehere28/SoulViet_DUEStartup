@@ -281,6 +281,55 @@ class RouteOptimizerTests(unittest.TestCase):
 
         self.assertEqual({place["id"] for place in result}, {"a", "b"})
 
+    def test_keeps_a_required_place_even_when_it_is_less_convenient(self):
+        route_matrix = matrix(
+            distances={
+                ("a", "b"): 1,
+                ("b", "a"): 1,
+                ("a", "c"): 10,
+                ("b", "c"): 10,
+            },
+            durations={
+                ("a", "b"): 1,
+                ("b", "a"): 1,
+                ("a", "c"): 40,
+                ("b", "c"): 40,
+            },
+        )
+
+        result = self.optimize(
+            route_matrix,
+            max_places=2,
+            max_distance_km=20,
+            required_place_ids={"c"},
+        )
+
+        self.assertIn("c", {place["id"] for place in result})
+
+    def test_returns_solver_arrival_and_respects_preferred_evening_time(self):
+        places = [{
+            "id": "evening",
+            "visit_duration_minutes": 30,
+            "preferred_start_minutes": 18 * 60,
+        }]
+        route_matrix = matrix(places=places, travel_minutes=0)
+        schedules = {"evening": open_day("08:00", "20:00")}
+
+        result = self.optimizer.optimize(
+            places,
+            schedules,
+            route_matrix,
+            1,
+            20,
+            8 * 60,
+            21 * 60,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertGreaterEqual(
+            result[0]["_optimized_arrival_minutes"], 18 * 60
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

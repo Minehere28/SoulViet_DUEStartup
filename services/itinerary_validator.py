@@ -1,4 +1,5 @@
 from utils.opening_hours import time_to_minutes
+from utils.place_matching import matches_category, place_categories, place_types
 
 
 class ItineraryValidator:
@@ -16,6 +17,17 @@ class ItineraryValidator:
         seen_brands = set()
         duplicate_brands = set()
         matched_preference_groups = set()
+        category_counts = {
+            rule.category: 0 for rule in user.category_constraints
+        }
+        excluded_types = {
+            value.strip().casefold()
+            for value in user.excluded_place_types if value.strip()
+        }
+        excluded_categories = {
+            value.strip().casefold()
+            for value in user.excluded_activity_categories if value.strip()
+        }
         requested_preference_groups = {
             value.strip().casefold()
             for value in user.preferred_activities
@@ -24,6 +36,9 @@ class ItineraryValidator:
 
         day_start = time_to_minutes(user.day_start_time.strftime("%H:%M"))
         day_end = time_to_minutes(user.day_end_time.strftime("%H:%M"))
+        idle_gap_minutes_by_day = []
+        tail_gap_minutes_by_day = []
+        all_idle_gaps = []
 
         for day_index, day in enumerate(itinerary, start=1):
             if day["total_distance_km"] > user.max_daily_distance_km + 0.01:
@@ -31,6 +46,7 @@ class ItineraryValidator:
 
             previous_departure = day_start
             day_attractions = 0
+            day_idle_gaps = []
             for place in day["places"]:
                 place_id = place["id"]
                 if place_id in seen:
@@ -39,6 +55,13 @@ class ItineraryValidator:
 
                 arrival = time_to_minutes(place["arrival_time"])
                 departure = time_to_minutes(place["departure_time"])
+                travel_minutes = max(
+                    0, int(place.get("travel_time_minutes", 0) or 0)
+                )
+                idle_minutes = max(
+                    0, arrival - previous_departure - travel_minutes
+                )
+                day_idle_gaps.append(idle_minutes)
                 if arrival < previous_departure or departure < arrival:
                     hard_violations.append(f"day_{day_index}:timeline_order")
                 if arrival < day_start or departure > day_end:
@@ -59,11 +82,19 @@ class ItineraryValidator:
                         seen_brands.add(brand_key)
                     if place.get("primary_role") == "supporting":
                         supporting_count += 1
-                    place_groups = {
-                        value.strip().casefold()
-                        for value in place.get("activity_categories", [])
-                        if value
-                    }
+                    place_groups = place_categories(place)
+                    current_place_types = place_types(place)
+                    if excluded_types & current_place_types:
+                        hard_violations.append(
+                            f"excluded_type_present:{place_id}"
+                        )
+                    if excluded_categories & place_groups:
+                        hard_violations.append(
+                            f"excluded_category_present:{place_id}"
+                        )
+                    for rule in user.category_constraints:
+                        if matches_category(place, rule.category):
+                            category_counts[rule.category] += 1
                     matched_preference_groups.update(
                         requested_preference_groups & place_groups
                     )
@@ -76,6 +107,12 @@ class ItineraryValidator:
                 soft_warnings.append(f"day_{day_index}:empty")
             elif day_attractions < min(3, user.max_places_per_day):
                 soft_warnings.append(f"day_{day_index}:few_attractions")
+            tail_gap = max(0, day_end - previous_departure)
+            idle_gap_minutes_by_day.append(sum(day_idle_gaps))
+            tail_gap_minutes_by_day.append(tail_gap)
+            all_idle_gaps.extend(day_idle_gaps)
+            if any(gap >= 90 for gap in day_idle_gaps):
+                soft_warnings.append(f"day_{day_index}:large_idle_gap")
 
         valid = not hard_violations
         quality_violations = []
@@ -90,6 +127,28 @@ class ItineraryValidator:
             quality_violations.append("too_many_supporting_places")
         if any(warning.endswith(":empty") for warning in soft_warnings):
             quality_violations.append("empty_days")
+        missing_required_ids = sorted(
+            set(user.required_place_ids) - seen
+        )
+        if missing_required_ids:
+            quality_violations.append("missing_required_places")
+        category_violations = []
+        for rule in user.category_constraints:
+            count = category_counts[rule.category]
+            if rule.mode == "hard" and count < rule.min_count:
+                category_violations.append(
+                    f"category_min_unmet:{rule.category}"
+                )
+            if (
+                rule.mode == "hard"
+                and rule.max_count is not None
+                and count > rule.max_count
+            ):
+                category_violations.append(
+                    f"category_max_exceeded:{rule.category}"
+                )
+        if category_violations:
+            quality_violations.append("category_constraints_unmet")
 
         acceptable = valid and not quality_violations
         if not valid:
@@ -132,6 +191,16 @@ class ItineraryValidator:
                 "preference_group_coverage_ratio": group_coverage_ratio,
                 "duplicate_brand_count": len(duplicate_brands),
                 "supporting_ratio": round(supporting_ratio, 3),
+                "missing_required_place_ids": missing_required_ids,
+                "category_counts": category_counts,
+                "category_constraint_violations": category_violations,
+                "idle_gap_minutes_by_day": idle_gap_minutes_by_day,
+                "tail_gap_minutes_by_day": tail_gap_minutes_by_day,
+                "max_idle_gap_minutes": max(all_idle_gaps, default=0),
+                "total_idle_minutes": sum(all_idle_gaps),
+                "large_idle_gap_count": sum(
+                    gap >= 90 for gap in all_idle_gaps
+                ),
                 "duplicate_place_count": len(
                     [item for item in hard_violations if item.startswith("duplicate_place:")]
                 ),

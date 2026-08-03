@@ -316,7 +316,7 @@
                             ${isMeal ? `🍽️ ${escapeHtml(place.meal_label)} · ` : ''}${escapeHtml(place.name)}
                         </div>
                         <div class="text-xs text-slate-500 mt-1">
-                            ${isMeal ? 'Dùng bữa 90' : `Tham quan ${place.visit_duration_minutes}`} phút ·
+                            ${isMeal ? 'Dùng bữa' : 'Tham quan'} ${place.visit_duration_minutes} phút ·
                             Di chuyển ${place.travel_time_minutes} phút ·
                             ${place.distance_from_previous_km} km
                         </div>
