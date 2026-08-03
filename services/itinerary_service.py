@@ -417,8 +417,16 @@ class ItineraryService:
             ],
         }
 
-    def build(self, user):
+    def build(
+        self,
+        user,
+        candidate_ids=None,
+        candidate_priorities=None,
+    ):
         filtered = self.graph.filter_places(user)
+        selected_candidate_ids = (
+            set(candidate_ids) if candidate_ids is not None else None
+        )
         scored = [
             (place, self.graph.score_place(place, user))
             for place in filtered
@@ -454,8 +462,18 @@ class ItineraryService:
             user.duration * self.MAX_CANDIDATES_PER_DAY,
             available_osrm_slots,
         )
+        candidate_priorities = candidate_priorities or {}
         candidates = [
-            place for place in all_candidates if not self._is_food_place(place)
+            {
+                **place,
+                "query_priority": candidate_priorities.get(place["id"], 0),
+            }
+            for place in all_candidates
+            if not self._is_food_place(place)
+            and (
+                selected_candidate_ids is None
+                or place["id"] in selected_candidate_ids
+            )
         ][:attraction_limit]
         restaurant_limit = max(
             0, available_osrm_slots - len(candidates)

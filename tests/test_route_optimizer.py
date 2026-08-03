@@ -262,6 +262,25 @@ class RouteOptimizerTests(unittest.TestCase):
             {"lunch", "dinner"},
         )
 
+    def test_prefers_graph_query_matches_before_shorter_unrelated_places(self):
+        places = [
+            {"id": "a", "visit_duration_minutes": 30, "query_priority": 50},
+            {"id": "b", "visit_duration_minutes": 30, "query_priority": 20},
+            {"id": "c", "visit_duration_minutes": 30, "query_priority": 0},
+        ]
+        route_matrix = matrix(places=places, travel_minutes=5)
+        schedules = {
+            place["id"]: {"status": "unknown", "intervals": []}
+            for place in places
+        }
+
+        result = self.optimizer.optimize(
+            places, schedules, route_matrix, 2, 100,
+            8 * 60, 18 * 60,
+        )
+
+        self.assertEqual({place["id"] for place in result}, {"a", "b"})
+
 
 if __name__ == "__main__":
     unittest.main()

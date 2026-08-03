@@ -8,3 +8,4 @@ class AssistantRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=1000)
     current_request: UserRequest
+    current_itinerary: list[dict] = Field(default_factory=list, max_length=14)

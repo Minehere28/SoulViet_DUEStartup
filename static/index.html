@@ -254,6 +254,7 @@
     <script>
         const startDateInput = document.getElementById('start-date');
         let currentPlanRequest = null;
+        let currentItinerary = [];
         let selectedBudget = 'standard';
         const budgetDailyLimits = { economy: 350000, standard: 700000, premium: 1400000 };
         startDateInput.value = new Date().toISOString().slice(0, 10);
@@ -430,6 +431,7 @@
                 }
 
                 renderItinerary(payload.itinerary);
+                currentItinerary = payload.itinerary;
 
                 document.getElementById('ai-content').innerHTML = `
                     <h3>Lưu ý về lịch trình</h3>
@@ -466,7 +468,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         message,
-                        current_request: currentPlanRequest
+                        current_request: currentPlanRequest,
+                        current_itinerary: currentItinerary
                     })
                 });
                 const payload = await response.json();
@@ -475,6 +478,7 @@
                 }
 
                 currentPlanRequest = payload.request;
+                currentItinerary = payload.itinerary;
                 document.getElementById('duration').value = payload.request.duration;
                 document.getElementById('region').value = payload.request.region;
                 document.getElementById('vibe').value = payload.request.vibe;

@@ -6,6 +6,7 @@ from models.assistant_request import AssistantRequest
 from models.user_request import RegionName, UserRequest, VibeName
 from services.assistant_service import AssistantService
 from services.itinerary_service import ItineraryService
+from models.assistant_intent import AssistantIntent, PlaceOperation
 
 
 class FakeLLM:
@@ -17,6 +18,14 @@ class FakeLLM:
             "fallback_reason": None,
             "usage": None,
         }
+
+
+class StructuredIntentLLM(FakeLLM):
+    def parse_intent(self, _message, _request, _itinerary):
+        return AssistantIntent(
+            intent="modify_itinerary",
+            operations=[PlaceOperation(action="remove", day=1, position=1)],
+        )
 
 
 class FakeRouting:
@@ -149,6 +158,62 @@ class AssistantServiceTests(unittest.TestCase):
             for item in day["places"]
         }
         self.assertNotIn(place["id"], returned_ids)
+
+    def test_question_does_not_rebuild_itinerary(self):
+        self.optimizer.candidate_counts.clear()
+        current_itinerary = [{
+            "date": "2026-08-01",
+            "total_distance_km": 5,
+            "places": [],
+        }]
+        payload = AssistantRequest(
+            message="Tại sao lịch này lại hợp lý?",
+            current_request=self.request(),
+            current_itinerary=current_itinerary,
+        )
+
+        result = self.service.customize(payload)
+
+        self.assertEqual(result["intent"], "question")
+        self.assertEqual(result["itinerary"], current_itinerary)
+        self.assertEqual(self.optimizer.candidate_counts, [])
+
+    def test_natural_preference_uses_graph_query(self):
+        result = self.customize(
+            "Ưu tiên biển và ít di chuyển"
+        )
+
+        self.assertEqual(result["intent"], "modify_itinerary")
+        self.assertIsNotNone(result["query_metadata"])
+        self.assertEqual(result["query_metadata"]["near_hops"], 1)
+        self.assertLessEqual(result["query_metadata"]["candidate_count"], 24)
+        self.assertIn(
+            "Biển & Hoạt động dưới nước",
+            result["request"]["preferred_activities"],
+        )
+
+    def test_structured_intent_resolves_a_place_position(self):
+        initial = self.service.itinerary.build(self.request(duration=1))
+        removed_id = initial[0]["places"][0]["id"]
+        service = AssistantService(
+            itinerary=self.service.itinerary,
+            llm=StructuredIntentLLM(),
+        )
+        payload = AssistantRequest(
+            message="Bỏ điểm đầu tiên",
+            current_request=self.request(duration=1),
+            current_itinerary=initial,
+        )
+
+        result = service.customize(payload)
+
+        self.assertIn(removed_id, result["request"]["excluded_place_ids"])
+        returned_ids = {
+            item["id"]
+            for day in result["itinerary"]
+            for item in day["places"]
+        }
+        self.assertNotIn(removed_id, returned_ids)
 
 
 if __name__ == "__main__":

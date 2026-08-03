@@ -63,19 +63,26 @@ cho mỗi bữa theo chi phí di chuyển OSRM của toàn tuyến. Timeline tr�
 
 ```json
 {
-  "message": "Đổi thành 3 ngày, 4 địa điểm mỗi ngày, trong 10 km",
+  "message": "Ưu tiên biển, ít di chuyển và bỏ điểm đầu tiên ngày 1",
   "current_request": {
     "duration": 2,
     "vibe": "Chữa lành & Yên bình",
     "region": "Đà Nẵng",
     "start_date": "2026-08-01"
-  }
+  },
+  "current_itinerary": []
 }
 ```
 
-Backend nhận diện thay đổi có cấu trúc và build lại hành trình trước khi gọi
-LLM. Nếu OpenRouter thiếu key, timeout hoặc hết quota, endpoint vẫn trả hành
-trình cùng phản hồi local.
+LLM chỉ tạo intent và graph query dạng JSON đã được Pydantic kiểm tra. Backend
+chọn seed node, có thể mở rộng quan hệ `NEAR` tối đa một hop, rồi tái sử dụng
+OSRM và OR-Tools để tạo lịch. `ItineraryValidator` kiểm tra lại giới hạn km,
+timeline, số điểm, địa điểm đóng cửa và trùng lặp trước khi LLM giải thích kết
+quả. Câu hỏi về lịch hiện tại không chạy lại route planner.
+
+Nếu OpenRouter thiếu key, timeout hoặc hết quota, các lệnh phổ biến vẫn được
+nhận diện bằng rule local. `current_itinerary` là tùy chọn nhưng cần được gửi
+để hiểu các tham chiếu như "điểm đầu tiên" hoặc trả lời về lịch hiện tại.
 
 Biến môi trường tùy chọn:
 

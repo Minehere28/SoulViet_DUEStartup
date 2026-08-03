@@ -178,7 +178,11 @@ class RouteOptimizer:
                     place.get("routing_id", place["id"]), []
                 ).append(index)
             else:
-                routing.AddDisjunction([index], self.DROP_PENALTY)
+                query_priority = max(0, int(place.get("query_priority", 0)))
+                routing.AddDisjunction(
+                    [index],
+                    self.DROP_PENALTY + query_priority * 100_000,
+                )
 
         for indices in meal_indices.values():
             routing.AddDisjunction(indices, self.MEAL_DROP_PENALTY, 1)
