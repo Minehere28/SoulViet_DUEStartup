@@ -2,6 +2,7 @@ import unittest
 
 from models.assistant_intent import GraphQueryPlan
 from services.graph_query_service import GraphQueryService
+from services.graph_service import GraphService
 
 
 def place(place_id, rating=4.5, name=None):
@@ -55,6 +56,28 @@ class FakeSimilarity:
 
 
 class GraphQueryServiceTests(unittest.TestCase):
+    def test_runtime_taxonomy_separates_meals_and_supporting_places(self):
+        primary, roles = GraphService._place_roles(
+            "tea_house", ["tea_house"]
+        )
+        self.assertEqual(primary, "meal")
+        self.assertIn("meal", roles)
+
+        primary, roles = GraphService._place_roles(
+            "gift_shop", ["gift_shop", "store", "food"]
+        )
+        self.assertEqual(primary, "supporting")
+        self.assertNotIn("attraction", roles)
+
+    def test_brand_key_groups_ezi_branches(self):
+        first = GraphService._brand_key(
+            "EZI - Đậm Đà Nẵng - 74 Phan Đăng Lưu"
+        )
+        second = GraphService._brand_key(
+            "EZI - Đậm Đà Nẵng - 388 Đống Đa"
+        )
+        self.assertEqual(first, second)
+
     def test_expands_near_exactly_one_hop_and_records_provenance(self):
         service = GraphQueryService(FakeGraph(), FakeSimilarity())
         query = GraphQueryPlan(
@@ -75,4 +98,3 @@ class GraphQueryServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

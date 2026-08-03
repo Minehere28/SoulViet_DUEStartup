@@ -2,7 +2,11 @@ import re
 from datetime import time
 from typing import get_args
 
-from models.assistant_intent import AssistantIntent, GraphQueryPlan
+from models.assistant_intent import (
+    AssistantIntent,
+    GraphQueryPlan,
+    PlaceOperation,
+)
 from models.user_request import RegionName, UserRequest, VibeName
 from services.graph_query_service import GraphQueryService
 from services.itinerary_service import ItineraryService
@@ -60,15 +64,43 @@ class AssistantService:
                 applied.append(f"quãng đường tối đa {distance:g} km/ngày")
 
         start_time_match = re.search(
-            r"(?:bắt\s*đầu|đi)\s*(?:lúc|từ)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:giờ|h)?",
+            r"(?:bắt\s*đầu|xuất\s*phát|khởi\s*hành)\s*"
+            r"(?:lúc\s*)?(\d{1,2})(?::(\d{2}))?\s*(?:giờ|h)?"
+            r"|(?:đi|tham\s*quan)\s+từ\s+"
+            r"(\d{1,2})(?::(\d{2}))?\s*(?:giờ|h)?",
             normalized,
         )
         if start_time_match:
-            hour = int(start_time_match.group(1))
-            minute = int(start_time_match.group(2) or 0)
+            hour = int(start_time_match.group(1) or start_time_match.group(3))
+            minute = int(
+                start_time_match.group(2)
+                or start_time_match.group(4)
+                or 0
+            )
             if 0 <= hour <= 23 and 0 <= minute <= 59:
                 updates["day_start_time"] = time(hour, minute)
                 applied.append(f"bắt đầu lúc {hour:02d}:{minute:02d}")
+
+        duration_window_match = re.search(
+            r"trong\s+(\d+(?:[.,]\d+)?)\s*(?:tiếng|giờ)",
+            normalized,
+        )
+        if duration_window_match:
+            duration_minutes = round(
+                float(duration_window_match.group(1).replace(",", "."))
+                * 60
+            )
+            start = updates.get(
+                "day_start_time", current_request.day_start_time
+            )
+            end_minutes = start.hour * 60 + start.minute + duration_minutes
+            if 0 < duration_minutes and end_minutes < 24 * 60:
+                updates["day_end_time"] = time(
+                    end_minutes // 60, end_minutes % 60
+                )
+                applied.append(
+                    f"khung thời gian {duration_minutes:g} phút"
+                )
 
         budget_aliases = {
             "tiết kiệm": "economy",
@@ -121,9 +153,6 @@ class AssistantService:
         normalized = message.casefold()
         category_aliases = {
             "biển": "Biển & Hoạt động dưới nước",
-            "ăn uống": "Ẩm thực",
-            "ẩm thực": "Ẩm thực",
-            "cà phê": "Cà phê & Đồ uống",
             "văn hóa": "Văn hóa & Lịch sử",
             "lịch sử": "Văn hóa & Lịch sử",
             "thiên nhiên": "Thiên nhiên & Ngắm cảnh",
@@ -146,11 +175,65 @@ class AssistantService:
         )
 
     @staticmethod
+    def _fallback_meal_preferences(message):
+        normalized = message.casefold()
+        aliases = {
+            "ăn uống": "local_food",
+            "ẩm thực": "local_food",
+            "đồ ăn địa phương": "local_food",
+            "món địa phương": "local_food",
+            "đặc sản": "local_food",
+            "cà phê": "cafe",
+            "cafe": "cafe",
+            "hải sản": "seafood",
+        }
+        return sorted({
+            value for keyword, value in aliases.items()
+            if keyword in normalized
+        })
+
+    @staticmethod
+    def _fallback_operations(message):
+        normalized = message.casefold()
+        if not re.search(r"\b(?:bỏ|xóa|loại)\b", normalized):
+            return []
+        match = re.search(
+            r"(?:điểm|mục)\s+"
+            r"(?:thứ\s*(\d+)|(đầu\s*tiên))"
+            r"(?:\s+(?:ở\s+)?ngày\s*(\d+))?",
+            normalized,
+        )
+        if not match:
+            return []
+        position = int(match.group(1) or 1)
+        item_type = "any" if "mục" in match.group(0) else "attraction"
+        return [PlaceOperation(
+            action="remove",
+            day=int(match.group(3) or 1),
+            position=position,
+            item_type=item_type,
+        )]
+
+    @staticmethod
+    def _requested_place_target(message):
+        normalized = message.casefold()
+        match = re.search(
+            r"\bđi\s+(\d)\s*(?:địa\s*)?điểm\b", normalized
+        )
+        if match and any(
+            phrase in normalized[max(0, match.start() - 12):match.end()]
+            for phrase in ("chỉ đi", "tối đa đi", "không quá")
+        ):
+            return None
+        return int(match.group(1)) if match else None
+
+    @staticmethod
     def _question_like(message):
         normalized = message.strip().casefold()
         return bool(re.search(
-            r"^(?:tại sao|vì sao|bao nhiêu|lịch này|lịch trình này|"
-            r"đánh giá|giải thích|có hợp lý|có ổn)",
+            r"^(?:tại sao|vì sao|bao nhiêu|tổng\s+(?:budget|ngân\s*sách|chi\s*phí)|"
+            r"ngày\s+nào|hôm\s+nào|lịch này|lịch trình này|đánh giá|giải thích|"
+            r"có hợp lý|có ổn|ổn không|có quá dày|có bị trùng)",
             normalized,
         ))
 
@@ -173,6 +256,14 @@ class AssistantService:
         if operation.day > len(current_itinerary):
             return None
         places = current_itinerary[operation.day - 1].get("places", [])
+        if operation.item_type != "any":
+            places = [
+                place for place in places
+                if (
+                    (place.get("item_type") == "meal")
+                    == (operation.item_type == "meal")
+                )
+            ]
         if operation.position > len(places):
             return None
         return places[operation.position - 1].get("id")
@@ -241,12 +332,34 @@ class AssistantService:
         fallback_query = self._fallback_graph_query(
             assistant_request.message
         )
+        fallback_meal_preferences = self._fallback_meal_preferences(
+            assistant_request.message
+        )
+        fallback_operations = self._fallback_operations(
+            assistant_request.message
+        )
+        requested_place_target = self._requested_place_target(
+            assistant_request.message
+        )
 
         if parsed_intent is None:
-            if rule_updates or fallback_query.is_active():
+            if (
+                rule_updates
+                or fallback_query.is_active()
+                or fallback_meal_preferences
+                or fallback_operations
+            ):
                 parsed_intent = AssistantIntent(
                     intent="modify_itinerary",
                     graph_query=fallback_query,
+                    scope=(
+                        "meals_only"
+                        if fallback_meal_preferences
+                        and not fallback_query.is_active()
+                        else "full_itinerary"
+                    ),
+                    meal_preferences=fallback_meal_preferences,
+                    operations=fallback_operations,
                 )
             elif self._question_like(assistant_request.message):
                 parsed_intent = AssistantIntent(intent="question")
@@ -339,12 +452,36 @@ class AssistantService:
             })
             applied.append("đổi hoạt động ưu tiên")
 
+        meal_preferences = (
+            parsed_intent.meal_preferences or fallback_meal_preferences
+        )
+        if meal_preferences:
+            applied.append("đổi ưu tiên ăn uống")
+        effective_scope = parsed_intent.scope
+        if (
+            meal_preferences
+            and not query.is_active()
+            and not parsed_intent.operations
+        ):
+            effective_scope = "meals_only"
+        retained_attraction_ids = (
+            [
+                place["id"]
+                for day in current_itinerary
+                for place in day.get("places", [])
+                if place.get("id")
+                and place.get("item_type") != "meal"
+            ]
+            if effective_scope == "meals_only" and current_itinerary
+            else None
+        )
+
         query_metadata = None
         itinerary = []
         validation_report = None
         working_query = query
         for attempt in range(self.MAX_QUERY_ATTEMPTS):
-            candidate_ids = None
+            candidate_ids = retained_attraction_ids
             if working_query.is_active():
                 query_metadata = self.graph_query.search(
                     updated_request, working_query
@@ -361,14 +498,45 @@ class AssistantService:
                 candidate_priorities=(
                     query_metadata["priorities"]
                     if query_metadata
-                    else None
+                    else (
+                        {
+                            place_id: 100
+                            for place_id in retained_attraction_ids
+                        }
+                        if retained_attraction_ids
+                        else None
+                    )
                 ),
+                meal_preferences=meal_preferences,
             )
             validation_report = self.validator.validate(
                 itinerary, updated_request
             )
-            has_places = any(day["places"] for day in itinerary)
-            if validation_report["valid"] and has_places:
+            if requested_place_target:
+                max_day_attractions = max(
+                    (
+                        sum(
+                            place.get("item_type") != "meal"
+                            for place in day.get("places", [])
+                        )
+                        for day in itinerary
+                    ),
+                    default=0,
+                )
+                validation_report["metrics"][
+                    "requested_place_target"
+                ] = requested_place_target
+                if 0 < max_day_attractions < requested_place_target:
+                    validation_report["acceptable"] = False
+                    validation_report["status"] = "partial"
+                    validation_report["quality_violations"] = sorted(set([
+                        *validation_report["quality_violations"],
+                        "requested_place_count_unmet",
+                    ]))
+            if (
+                validation_report["valid"]
+                and validation_report.get("acceptable", True)
+            ):
                 break
             if not working_query.is_active():
                 break

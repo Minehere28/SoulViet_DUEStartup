@@ -68,6 +68,10 @@ class GraphQueryService:
             place["id"]: place
             for place in self.graph.filter_places(user)
             if place["rating"] >= query.minimum_rating
+            and (
+                not place.get("roles")
+                or "attraction" in place["roles"]
+            )
         }
         ranked = sorted(
             allowed.values(),

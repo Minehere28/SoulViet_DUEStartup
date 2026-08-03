@@ -12,6 +12,15 @@ class ItineraryValidator:
         attraction_count = 0
         preference_matched_count = 0
         meal_count = 0
+        supporting_count = 0
+        seen_brands = set()
+        duplicate_brands = set()
+        matched_preference_groups = set()
+        requested_preference_groups = {
+            value.strip().casefold()
+            for value in user.preferred_activities
+            if value.strip()
+        }
 
         day_start = time_to_minutes(user.day_start_time.strftime("%H:%M"))
         day_end = time_to_minutes(user.day_end_time.strftime("%H:%M"))
@@ -43,6 +52,21 @@ class ItineraryValidator:
                 else:
                     attraction_count += 1
                     day_attractions += 1
+                    brand_key = place.get("brand_key")
+                    if brand_key:
+                        if brand_key in seen_brands:
+                            duplicate_brands.add(brand_key)
+                        seen_brands.add(brand_key)
+                    if place.get("primary_role") == "supporting":
+                        supporting_count += 1
+                    place_groups = {
+                        value.strip().casefold()
+                        for value in place.get("activity_categories", [])
+                        if value
+                    }
+                    matched_preference_groups.update(
+                        requested_preference_groups & place_groups
+                    )
                     if place.get("query_priority", 0) >= 20:
                         preference_matched_count += 1
 
@@ -53,19 +77,61 @@ class ItineraryValidator:
             elif day_attractions < min(3, user.max_places_per_day):
                 soft_warnings.append(f"day_{day_index}:few_attractions")
 
+        valid = not hard_violations
+        quality_violations = []
+        if attraction_count == 0:
+            quality_violations.append("no_attractions")
+        if duplicate_brands:
+            quality_violations.append("duplicate_brands")
+        supporting_ratio = (
+            supporting_count / attraction_count if attraction_count else 0
+        )
+        if supporting_ratio > 0.4:
+            quality_violations.append("too_many_supporting_places")
+        if any(warning.endswith(":empty") for warning in soft_warnings):
+            quality_violations.append("empty_days")
+
+        acceptable = valid and not quality_violations
+        if not valid:
+            status = "invalid"
+        elif attraction_count == 0:
+            status = "infeasible"
+        elif quality_violations:
+            status = "partial"
+        else:
+            status = "success"
+
+        preference_match_ratio = (
+            round(preference_matched_count / attraction_count, 3)
+            if attraction_count
+            else 0
+        )
+        group_coverage_ratio = (
+            round(
+                len(matched_preference_groups)
+                / len(requested_preference_groups),
+                3,
+            )
+            if requested_preference_groups
+            else 1.0
+        )
+
         return {
-            "valid": not hard_violations,
+            "valid": valid,
+            "acceptable": acceptable,
+            "status": status,
             "hard_violations": sorted(set(hard_violations)),
             "soft_warnings": sorted(set(soft_warnings)),
+            "quality_violations": sorted(set(quality_violations)),
             "metrics": {
                 "day_count": len(itinerary),
                 "attraction_count": attraction_count,
                 "meal_count": meal_count,
-                "preference_match_ratio": (
-                    round(preference_matched_count / attraction_count, 3)
-                    if attraction_count
-                    else 0
-                ),
+                "preference_match_ratio": preference_match_ratio,
+                "place_preference_match_ratio": preference_match_ratio,
+                "preference_group_coverage_ratio": group_coverage_ratio,
+                "duplicate_brand_count": len(duplicate_brands),
+                "supporting_ratio": round(supporting_ratio, 3),
                 "duplicate_place_count": len(
                     [item for item in hard_violations if item.startswith("duplicate_place:")]
                 ),

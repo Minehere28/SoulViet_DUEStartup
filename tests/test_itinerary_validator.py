@@ -61,6 +61,30 @@ class ItineraryValidatorTests(unittest.TestCase):
         self.assertIn("day_1:timeline_order", report["hard_violations"])
         self.assertIn("duplicate_place:a", report["hard_violations"])
 
+    def test_marks_a_meal_only_result_as_infeasible(self):
+        itinerary = [{
+            "total_distance_km": 1,
+            "places": [self.item("meal", "11:30", "13:00", "meal")],
+        }]
+
+        report = ItineraryValidator.validate(itinerary, self.request())
+
+        self.assertTrue(report["valid"])
+        self.assertFalse(report["acceptable"])
+        self.assertEqual(report["status"], "infeasible")
+        self.assertIn("no_attractions", report["quality_violations"])
+
+    def test_reports_duplicate_brands_as_partial(self):
+        first = self.item("a", "08:00", "09:00")
+        second = self.item("b", "09:10", "10:00")
+        first["brand_key"] = second["brand_key"] = "same_brand"
+        itinerary = [{"total_distance_km": 1, "places": [first, second]}]
+
+        report = ItineraryValidator.validate(itinerary, self.request())
+
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["metrics"]["duplicate_brand_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

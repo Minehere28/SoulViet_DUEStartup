@@ -1,3 +1,6 @@
+import re
+import unicodedata
+
 import torch
 
 from services.scoring_service import ScoringService
@@ -5,6 +8,23 @@ from services.scoring_service import ScoringService
 
 class GraphService:
     """Load graph data and expose one canonical dictionary-based schema."""
+
+    MEAL_TYPES = {
+        "bakery", "breakfast_restaurant", "brunch_restaurant", "cafe",
+        "coffee_shop", "fast_food_restaurant", "food", "food_court",
+        "restaurant", "seafood_restaurant", "tea_house",
+        "vietnamese_restaurant", "vegetarian_restaurant",
+    }
+    SUPPORTING_TYPES = {
+        "food_store", "gift_shop", "grocery_or_supermarket", "lodging",
+        "manufacturer", "shopping_mall", "store", "souvenir_store",
+    }
+    EXPERIENCE_TYPES = {
+        "art_gallery", "art_studio", "beach", "campground",
+        "historical_landmark", "historical_place", "market", "monument",
+        "museum", "natural_feature", "park", "place_of_worship",
+        "scenic_spot", "tourist_attraction",
+    }
 
     def __init__(self, path="graph.pt"):
         graph = torch.load(path, weights_only=False)
@@ -15,6 +35,56 @@ class GraphService:
             default=0,
         )
         self.scoring = ScoringService(max_reviews)
+
+    @classmethod
+    def _place_roles(cls, primary_type, types):
+        normalized = {
+            str(value).strip().casefold()
+            for value in (primary_type, *types)
+            if value
+        }
+        roles = set()
+        if normalized & cls.MEAL_TYPES or any(
+            "restaurant" in value for value in normalized
+        ):
+            roles.add("meal")
+        if normalized & cls.SUPPORTING_TYPES:
+            roles.add("supporting")
+        if normalized & cls.EXPERIENCE_TYPES:
+            roles.add("attraction")
+
+        primary = str(primary_type or "").strip().casefold()
+        if primary in cls.MEAL_TYPES or "restaurant" in primary:
+            primary_role = "meal"
+        elif primary in cls.SUPPORTING_TYPES:
+            primary_role = "supporting"
+        elif primary in cls.EXPERIENCE_TYPES:
+            primary_role = "attraction"
+        elif "attraction" in roles:
+            primary_role = "attraction"
+        elif "meal" in roles:
+            primary_role = "meal"
+        elif "supporting" in roles:
+            primary_role = "supporting"
+        else:
+            # The source dataset is a tourism dataset. Unknown legacy types stay
+            # eligible until their taxonomy is audited explicitly.
+            primary_role = "attraction"
+            roles.add("attraction")
+        return primary_role, sorted(roles)
+
+    @staticmethod
+    def _brand_key(name):
+        value = unicodedata.normalize("NFKD", str(name or ""))
+        value = "".join(char for char in value if not unicodedata.combining(char))
+        value = value.casefold()
+        value = re.sub(r"\([^)]*\)", " ", value)
+        parts = re.split(r"\s+(?:-|–|—)\s+", value)
+        if len(parts) > 1 and len(parts[0].split()) <= 8:
+            value = parts[0]
+        value = re.sub(r"\b(?:chi nhanh|co so|cs)\s*\d*\b", " ", value)
+        value = re.sub(r"[^a-z0-9]+", " ", value)
+        return "_".join(value.split())
 
     @staticmethod
     def _normalize_nodes(raw_nodes):
@@ -42,12 +112,22 @@ class GraphService:
             if isinstance(types, str):
                 types = [types] if types else []
 
+            primary_type = row.get("type", "")
+            all_types = list(row.get("all_types", []))
+            primary_role, roles = GraphService._place_roles(
+                primary_type, all_types or list(types)
+            )
+            name = row.get("name", row.get("Name", ""))
+
             nodes[place_id] = {
                 "id": place_id,
                 "google_place_id": row.get("google_place_id", ""),
-                "name": row.get("name", row.get("Name", "")),
-                "type": row.get("type", ""),
-                "all_types": list(row.get("all_types", [])),
+                "name": name,
+                "type": primary_type,
+                "all_types": all_types,
+                "primary_role": primary_role,
+                "roles": roles,
+                "brand_key": row.get("brand_key") or GraphService._brand_key(name),
                 "address": row.get("address", ""),
                 "region": row.get("region", ""),
                 "lat": float(row.get("lat", row.get("Lat", 0)) or 0),

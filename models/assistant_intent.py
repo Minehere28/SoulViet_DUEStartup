@@ -54,6 +54,7 @@ class PlaceOperation(BaseModel):
     place_id: str | None = None
     day: int | None = Field(default=None, ge=1, le=14)
     position: int | None = Field(default=None, ge=1, le=10)
+    item_type: Literal["attraction", "meal", "any"] = "attraction"
 
 
 class AssistantIntent(BaseModel):
@@ -62,7 +63,11 @@ class AssistantIntent(BaseModel):
     intent: Literal["modify_itinerary", "question", "unknown"]
     request_updates: RequestUpdates = Field(default_factory=RequestUpdates)
     graph_query: GraphQueryPlan = Field(default_factory=GraphQueryPlan)
+    scope: Literal[
+        "full_itinerary", "attractions_only", "meals_only",
+        "single_day", "single_item",
+    ] = "full_itinerary"
+    meal_preferences: list[str] = Field(default_factory=list, max_length=10)
     operations: list[PlaceOperation] = Field(default_factory=list, max_length=10)
     needs_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=300)
-

@@ -28,7 +28,8 @@ class ItineraryService:
         "fast_food_restaurant", "vegetarian_restaurant", "asian_restaurant",
         "breakfast_restaurant", "brunch_restaurant", "food_court",
     }
-    FOOD_FALLBACK_TYPES = {"cafe", "coffee_shop", "bakery"}
+    FOOD_FALLBACK_TYPES = {"cafe", "coffee_shop", "bakery", "tea_house"}
+    CAFE_TYPES = {"cafe", "coffee_shop", "tea_house"}
 
     def __init__(self, graph=None, routing=None, optimizer=None):
         self.graph = graph or GraphService()
@@ -64,11 +65,72 @@ class ItineraryService:
             return 0
         if types & cls.FOOD_FALLBACK_TYPES:
             return 1
+        if place.get("primary_role") == "meal":
+            return 2
         return None
 
     @classmethod
     def _is_food_place(cls, place):
-        return cls._food_priority(place) is not None
+        return (
+            place.get("primary_role") == "meal"
+            or cls._food_priority(place) is not None
+        )
+
+    @staticmethod
+    def _is_attraction(place):
+        roles = place.get("roles")
+        return not roles or "attraction" in roles
+
+    @staticmethod
+    def _types(place):
+        return {
+            str(value).strip().casefold()
+            for value in (
+                place.get("type", ""),
+                *place.get("all_types", []),
+                *place.get("types", []),
+            )
+            if value
+        }
+
+    @classmethod
+    def _meal_preference_score(cls, place, preferences):
+        types = cls._types(place)
+        searchable = " ".join((
+            place.get("name", ""),
+            place.get("description", ""),
+            *types,
+            *place.get("activities", []),
+            *place.get("activity_categories", []),
+        )).casefold()
+        score = 0
+        for preference in preferences:
+            if preference == "cafe" and types & cls.CAFE_TYPES:
+                score += 4
+            elif preference == "seafood" and (
+                "seafood_restaurant" in types or "hải sản" in searchable
+            ):
+                score += 4
+            elif preference == "local_food" and (
+                "vietnamese_restaurant" in types
+                or "địa phương" in searchable
+                or "đặc sản" in searchable
+                or "local" in searchable
+            ):
+                score += 3
+        return score
+
+    @staticmethod
+    def _deduplicate_brands(places):
+        selected = []
+        seen = set()
+        for place in places:
+            brand = place.get("brand_key") or place["id"]
+            if brand in seen:
+                continue
+            selected.append(place)
+            seen.add(brand)
+        return selected
 
     @staticmethod
     def _routing_id(place):
@@ -76,10 +138,20 @@ class ItineraryService:
 
     def _meal_candidates(
         self, restaurants, attractions, route_matrix, weekday,
-        day_start_minutes, day_end_minutes,
+        day_start_minutes, day_end_minutes, meal_preferences=None,
     ):
         result = []
-        for meal in self.MEAL_SLOTS:
+        meal_preferences = meal_preferences or []
+        meal_slots = list(self.MEAL_SLOTS)
+        if "cafe" in meal_preferences:
+            meal_slots.append({
+                "key": "cafe_break",
+                "label": "Nghỉ cà phê",
+                "start": 930,
+                "end": 975,
+                "duration": 45,
+            })
+        for meal in meal_slots:
             if not (
                 day_start_minutes <= meal["start"]
                 and meal["end"] <= day_end_minutes
@@ -87,9 +159,18 @@ class ItineraryService:
                 continue
             eligible = []
             for restaurant in restaurants:
+                types = self._types(restaurant)
+                if meal["key"] == "cafe_break" and not types & self.CAFE_TYPES:
+                    continue
+                if meal["key"] in {"lunch", "dinner"} and (
+                    types & self.CAFE_TYPES
+                    and not types & self.RESTAURANT_TYPES
+                ):
+                    continue
+                visit_duration = meal.get("duration", 90)
                 schedule = self._day_schedule(restaurant, weekday)
                 windows = visit_start_windows(
-                    schedule, 90, meal["start"], meal["end"]
+                    schedule, visit_duration, meal["start"], meal["end"]
                 )
                 if not any(start <= meal["start"] <= end for start, end in windows):
                     continue
@@ -103,13 +184,16 @@ class ItineraryService:
                     default=0,
                 )
                 eligible.append((
+                    -self._meal_preference_score(
+                        restaurant, meal_preferences
+                    ),
                     self._food_priority(restaurant),
                     nearby_minutes,
                     -restaurant.get("rating", 0),
                     restaurant,
                 ))
             eligible.sort(key=lambda item: item[:3])
-            for _, _, _, restaurant in eligible[: self.MEAL_ALTERNATIVES_PER_SLOT]:
+            for _, _, _, _, restaurant in eligible[: self.MEAL_ALTERNATIVES_PER_SLOT]:
                 result.append({
                     **restaurant,
                     "id": f"__meal__{meal['key']}__{restaurant['id']}",
@@ -118,7 +202,7 @@ class ItineraryService:
                     "meal_slot": meal["key"],
                     "meal_label": meal["label"],
                     "fixed_start_minutes": meal["start"],
-                    "visit_duration_minutes": 90,
+                    "visit_duration_minutes": meal.get("duration", 90),
                 })
         return result
 
@@ -287,6 +371,7 @@ class ItineraryService:
         day_end_minutes,
         route_matrix,
         start_place=None,
+        meal_preferences=None,
     ):
         weekday = weekday_key(trip_date)
         day_places = []
@@ -311,7 +396,7 @@ class ItineraryService:
         ][: self.MAX_CANDIDATES_PER_DAY]
         meal_candidates = self._meal_candidates(
             restaurants, attraction_candidates, route_matrix, weekday,
-            day_start_minutes, day_end_minutes,
+            day_start_minutes, day_end_minutes, meal_preferences,
         )
         optimization_candidates = [*attraction_candidates, *meal_candidates]
         all_day_schedules.update({
@@ -422,6 +507,7 @@ class ItineraryService:
         user,
         candidate_ids=None,
         candidate_priorities=None,
+        meal_preferences=None,
     ):
         filtered = self.graph.filter_places(user)
         selected_candidate_ids = (
@@ -463,24 +549,31 @@ class ItineraryService:
             available_osrm_slots,
         )
         candidate_priorities = candidate_priorities or {}
-        candidates = [
+        candidates = self._deduplicate_brands([
             {
                 **place,
                 "query_priority": candidate_priorities.get(place["id"], 0),
             }
             for place in all_candidates
             if not self._is_food_place(place)
+            and self._is_attraction(place)
             and (
                 selected_candidate_ids is None
                 or place["id"] in selected_candidate_ids
             )
-        ][:attraction_limit]
+        ])[:attraction_limit]
         restaurant_limit = max(
             0, available_osrm_slots - len(candidates)
         )
-        restaurants = [
+        restaurants = self._deduplicate_brands([
             place for place in all_candidates if self._is_food_place(place)
-        ][:restaurant_limit]
+        ])
+        restaurants.sort(key=lambda place: (
+            -self._meal_preference_score(place, meal_preferences or []),
+            self._food_priority(place),
+            -place.get("rating", 0),
+        ))
+        restaurants = restaurants[:restaurant_limit]
         scores = {
             place["id"]: score["total"]
             for place, score in scored
@@ -513,6 +606,7 @@ class ItineraryService:
                     day_end_minutes,
                     route_matrix,
                     start_place,
+                    meal_preferences,
                 )
             )
             used_restaurants = set(days[-1].pop("_used_restaurant_ids"))

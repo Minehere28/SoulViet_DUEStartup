@@ -109,7 +109,9 @@ class LLMService:
             "modify_itinerary nếu họ muốn thay đổi; unknown nếu thiếu thông tin. "
             "Không tạo ID địa điểm. Chỉ dùng place_id có trong current_itinerary. "
             "Dùng graph_query để mô tả sở thích tìm kiếm; NEAR tối đa một hop, "
-            "candidate_limit tối đa 24. Nếu câu lệnh mơ hồ, đặt "
+            "candidate_limit tối đa 24. Tách sở thích ăn uống vào meal_preferences; "
+            "nếu chỉ đổi bữa ăn hoặc thêm cà phê thì đặt scope=meals_only. "
+            "Nếu câu lệnh mơ hồ, đặt "
             "needs_clarification=true và viết một câu hỏi ngắn."
         )
         user_payload = {
@@ -209,9 +211,10 @@ class LLMService:
         )
 
     @staticmethod
-    def local_question_reply(itinerary):
+    def local_question_reply(message, itinerary):
         if not itinerary:
             return "Mình chưa có lịch trình hiện tại để đánh giá."
+        normalized = message.casefold()
         place_count = sum(
             sum(
                 place.get("item_type") != "meal"
@@ -230,6 +233,38 @@ class LLMService:
         )
         spend_min_text = f"{spend_min:,}".replace(",", ".")
         spend_max_text = f"{spend_max:,}".replace(",", ".")
+        if any(
+            phrase in normalized
+            for phrase in ("budget", "ngân sách", "chi phí", "bao nhiêu")
+        ):
+            return (
+                f"Chi phí ước tính của lịch hiện tại là "
+                f"{spend_min_text}–{spend_max_text} đồng/người."
+            )
+        if ("ngày nào" in normalized or "hôm nào" in normalized) and any(
+            phrase in normalized for phrase in ("xa", "di chuyển", "quãng đường")
+        ):
+            day_index, farthest = max(
+                enumerate(itinerary, start=1),
+                key=lambda item: float(item[1].get("total_distance_km") or 0),
+            )
+            return (
+                f"Ngày {day_index} di chuyển xa nhất, khoảng "
+                f"{float(farthest.get('total_distance_km') or 0):.1f} km."
+            )
+        if "trùng" in normalized:
+            ids = [
+                place.get("id")
+                for day in itinerary
+                for place in day.get("places", [])
+                if place.get("id")
+            ]
+            duplicate_count = len(ids) - len(set(ids))
+            return (
+                "Lịch hiện tại không bị trùng địa điểm."
+                if duplicate_count == 0
+                else f"Lịch hiện tại có {duplicate_count} địa điểm bị lặp."
+            )
         return (
             f"Lịch hiện tại có {len(itinerary)} ngày, {place_count} điểm tham quan, "
             f"tổng quãng đường khoảng {distance:.1f} km và chi phí ước tính "
@@ -237,7 +272,7 @@ class LLMService:
         )
 
     def answer_question(self, message, itinerary, request_data):
-        fallback = self.local_question_reply(itinerary)
+        fallback = self.local_question_reply(message, itinerary)
         if not self.api_key:
             return {
                 "answer": fallback,

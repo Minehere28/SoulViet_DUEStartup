@@ -108,6 +108,7 @@ class AssistantServiceTests(unittest.TestCase):
     def test_changes_max_places(self):
         result = self.customize("Chỉ đi 3 địa điểm mỗi ngày")
         self.assertEqual(result["request"]["max_places_per_day"], 3)
+        self.assertEqual(result["request"]["day_start_time"], "08:00:00")
 
     def test_changes_max_places_to_eight(self):
         result = self.customize("Chỉ đi 8 địa điểm mỗi ngày")
@@ -138,6 +139,15 @@ class AssistantServiceTests(unittest.TestCase):
     def test_changes_distance(self):
         result = self.customize("Không đi quá 8,5 km")
         self.assertEqual(result["request"]["max_daily_distance_km"], 8.5)
+
+    def test_applies_a_relative_daily_time_window(self):
+        result = self.customize("Đi 8 điểm trong 2 tiếng và không quá 1 km")
+        self.assertEqual(result["request"]["day_start_time"], "08:00:00")
+        self.assertEqual(result["request"]["day_end_time"], "10:00:00")
+        self.assertIn(
+            result["validation_report"]["status"],
+            {"partial", "infeasible"},
+        )
 
     def test_changes_vibe(self):
         target_vibe = self.vibes[0]
@@ -177,6 +187,43 @@ class AssistantServiceTests(unittest.TestCase):
         self.assertEqual(result["intent"], "question")
         self.assertEqual(result["itinerary"], current_itinerary)
         self.assertEqual(self.optimizer.candidate_counts, [])
+
+    def test_budget_and_distance_questions_do_not_rebuild(self):
+        current_itinerary = [{
+            "date": "2026-08-01",
+            "total_distance_km": 5,
+            "estimated_spend_min": 100000,
+            "estimated_spend_max": 200000,
+            "places": [],
+        }]
+        for message in (
+            "Tổng budget khoảng bao nhiêu?",
+            "Ngày nào di chuyển xa nhất?",
+        ):
+            with self.subTest(message=message):
+                self.optimizer.candidate_counts.clear()
+                result = self.service.customize(AssistantRequest(
+                    message=message,
+                    current_request=self.request(),
+                    current_itinerary=current_itinerary,
+                ))
+                self.assertEqual(result["intent"], "question")
+                self.assertEqual(result["itinerary"], current_itinerary)
+                self.assertEqual(self.optimizer.candidate_counts, [])
+
+    def test_local_position_reference_removes_first_attraction(self):
+        initial = self.service.itinerary.build(self.request(duration=1))
+        attractions = [
+            place for place in initial[0]["places"]
+            if place.get("item_type") != "meal"
+        ]
+        removed_id = attractions[0]["id"]
+        result = self.service.customize(AssistantRequest(
+            message="Bỏ điểm đầu tiên ngày 1",
+            current_request=self.request(duration=1),
+            current_itinerary=initial,
+        ))
+        self.assertIn(removed_id, result["request"]["excluded_place_ids"])
 
     def test_natural_preference_uses_graph_query(self):
         result = self.customize(
