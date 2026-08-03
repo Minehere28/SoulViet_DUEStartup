@@ -262,6 +262,49 @@ class AssistantServiceTests(unittest.TestCase):
         }
         self.assertNotIn(removed_id, returned_ids)
 
+    def test_an_trua_triggers_meal_preferences(self):
+        result = self.customize("Thêm ăn trưa và ăn tối vào giúp mình")
+        self.assertEqual(result["intent"], "modify_itinerary")
+        self.assertIn("đổi ưu tiên ăn uống", result["applied_changes"])
+
+    def test_cafe_accent_triggers_meal_preferences(self):
+        result = self.customize("Thêm café vào buổi chiều")
+        self.assertEqual(result["intent"], "modify_itinerary")
+        self.assertIn("đổi ưu tiên ăn uống", result["applied_changes"])
+
+    def test_policy_no_shops_triggers_rebuild(self):
+        result = self.customize(
+            "Đừng chọn toàn cửa hàng làm điểm tham quan"
+        )
+        self.assertEqual(result["intent"], "modify_itinerary")
+        self.assertIn("lọc điểm tham quan chính", result["applied_changes"])
+
+    def test_policy_no_brand_dupes_triggers_rebuild(self):
+        result = self.customize(
+            "Đừng lặp nhiều chi nhánh cùng một thương hiệu"
+        )
+        self.assertEqual(result["intent"], "modify_itinerary")
+        self.assertIn("loại trùng thương hiệu", result["applied_changes"])
+
+    def test_question_about_duplicates_does_not_rebuild(self):
+        current_itinerary = [{
+            "date": "2026-08-01",
+            "total_distance_km": 5,
+            "places": [],
+        }]
+        for message in (
+            "Có địa điểm nào bị trùng không?",
+            "Có ngày nào bị trống không?",
+            "Tổng quãng đường khoảng bao nhiêu km?",
+        ):
+            with self.subTest(message=message):
+                result = self.service.customize(AssistantRequest(
+                    message=message,
+                    current_request=self.request(duration=1),
+                    current_itinerary=current_itinerary,
+                ))
+                self.assertEqual(result["intent"], "question")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -185,7 +185,14 @@ class AssistantService:
             "đặc sản": "local_food",
             "cà phê": "cafe",
             "cafe": "cafe",
+            "café": "cafe",
             "hải sản": "seafood",
+            "ăn trưa": "meal",
+            "ăn tối": "meal",
+            "bữa trưa": "meal",
+            "bữa tối": "meal",
+            "nhà hàng": "meal",
+            "quán ăn": "meal",
         }
         return sorted({
             value for keyword, value in aliases.items()
@@ -228,12 +235,27 @@ class AssistantService:
         return int(match.group(1)) if match else None
 
     @staticmethod
+    def _policy_rebuild_label(message):
+        normalized = message.casefold()
+        if re.search(r"đừng\s+(?:chọn\s+(?:toàn|hết)|để\s+toàn)", normalized):
+            return "lọc điểm tham quan chính"
+        if re.search(r"(?:đừng|không)\s+lặp", normalized):
+            return "loại trùng thương hiệu"
+        if re.search(
+            r"đừng\s+trả\s+lịch\s+trống|không\s+khả\s+thi.*giảm",
+            normalized,
+        ):
+            return "kiểm tra tính khả thi"
+        return None
+
+    @staticmethod
     def _question_like(message):
         normalized = message.strip().casefold()
         return bool(re.search(
-            r"^(?:tại sao|vì sao|bao nhiêu|tổng\s+(?:budget|ngân\s*sách|chi\s*phí)|"
+            r"^(?:tại sao|vì sao|bao nhiêu|tổng\s+(?:budget|ngân\s*sách|chi\s*phí|quãng\s*đường)|"
             r"ngày\s+nào|hôm\s+nào|lịch này|lịch trình này|đánh giá|giải thích|"
-            r"có hợp lý|có ổn|ổn không|có quá dày|có bị trùng)",
+            r"có hợp lý|có ổn|ổn không|có quá dày|có bị trùng|"
+            r"có\s+(?:địa\s*điểm|ngày|điểm)\s+nào)",
             normalized,
         ))
 
@@ -342,6 +364,10 @@ class AssistantService:
             assistant_request.message
         )
 
+        policy_label = self._policy_rebuild_label(
+            assistant_request.message
+        )
+
         if parsed_intent is None:
             if (
                 rule_updates
@@ -360,6 +386,11 @@ class AssistantService:
                     ),
                     meal_preferences=fallback_meal_preferences,
                     operations=fallback_operations,
+                )
+            elif policy_label:
+                applied.append(policy_label)
+                parsed_intent = AssistantIntent(
+                    intent="modify_itinerary",
                 )
             elif self._question_like(assistant_request.message):
                 parsed_intent = AssistantIntent(intent="question")
