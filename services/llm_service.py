@@ -10,11 +10,16 @@ load_dotenv()
 class LLMService:
 
     def __init__(self):
+        api_key = os.getenv("GROQ_API_KEY")
+        
+        # Thêm dòng này để kiểm tra xem key có được load không
+        print("====== DEBUG GROQ_API_KEY ======")
+        print(f"Value: {api_key}")
+        print(f"Type: {type(api_key)}")
+        print("================================")
 
         self.client = Groq(
-            api_key=os.getenv(
-                "GROQ_API_KEY"
-            )
+            api_key=api_key
         )
 
     def generate_itinerary_text(

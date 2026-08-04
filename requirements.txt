@@ -2,3 +2,6 @@ fastapi
 uvicorn
 pandas
 neo4j
+groq
+python-dotenv
+torch

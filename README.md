@@ -5,3 +5,7 @@
 ```
 # when u have graph.pt() u can start my program
 # 
+
+
+# run main.py to start program
+uvicorn app:app --reload

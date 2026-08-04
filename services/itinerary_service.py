@@ -246,34 +246,44 @@ class ItineraryService:
         for day in optimized_days:
 
             formatted_days.append({
-
                 "day": day["day"],
-
                 "score": day["score"],
-
                 "total_cost": day["total_cost"],
-
                 "total_time": day["total_time"],
 
                 "morning": [
-                    p["name"]
+                    {
+                        "name": p["name"],
+                        "type": p.get("type", p.get("Type", "Unknown")),
+                        "latitude": p.get("lat", p.get("Lat", 0.0)),
+                        "longitude": p.get("lng", p.get("Lng", 0.0))
+                    }
                     for p in day["morning"]
                 ],
 
                 "afternoon": [
-                    p["name"]
+                    {
+                        "name": p["name"],
+                        "type": p.get("type", p.get("Type", "Unknown")),
+                        "latitude": p.get("lat", p.get("Lat", 0.0)),
+                        "longitude": p.get("lng", p.get("Lng", 0.0))
+                    }
                     for p in day["afternoon"]
                 ],
 
                 "evening": [
-                    p["name"]
+                    {
+                        "name": p["name"],
+                        "type": p.get("type", p.get("Type", "Unknown")),
+                        "latitude": p.get("lat", p.get("Lat", 0.0)),
+                        "longitude": p.get("lng", p.get("Lng", 0.0))
+                    }
                     for p in day["evening"]
                 ],
 
                 "route_flow": day["route_flow"]
             })
-
-        ai_content = (
+            ai_content = (
             self.llm.generate_itinerary_text(
                 itinerary_data=formatted_days,
                 user=user
