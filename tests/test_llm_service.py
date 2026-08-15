@@ -11,7 +11,6 @@ class LLMServiceTests(unittest.TestCase):
 
     def test_parses_a_structured_intent(self):
         response = {
-            "intent": "modify_itinerary",
             "request_updates": {
                 "max_daily_distance_km": 12,
             },
@@ -21,8 +20,11 @@ class LLMServiceTests(unittest.TestCase):
                 "near_hops": 1,
             },
         }
-        self.service._complete = lambda *_args, **_kwargs: (
-            json.dumps(response, ensure_ascii=False),
+        self.service._request_completion = lambda *_args, **_kwargs: (
+            {"tool_calls": [{"function": {
+                "name": "replan_itinerary",
+                "arguments": json.dumps(response, ensure_ascii=False),
+            }}]},
             {},
         )
 
@@ -35,18 +37,46 @@ class LLMServiceTests(unittest.TestCase):
         self.assertEqual(intent.graph_query.near_hops, 1)
 
     def test_rejects_unknown_fields_from_the_model(self):
-        response = {
-            "intent": "modify_itinerary",
-            "unsafe_query": "MATCH (n) DELETE n",
-        }
-        self.service._complete = lambda *_args, **_kwargs: (
-            json.dumps(response),
+        self.service._request_completion = lambda *_args, **_kwargs: (
+            {"tool_calls": [{"function": {
+                "name": "replan_itinerary",
+                "arguments": json.dumps({
+                    "unsafe_query": "MATCH (n) DELETE n",
+                }),
+            }}]},
             {},
         )
 
         intent = self.service.parse_intent("test", {}, [])
 
         self.assertIsNone(intent)
+
+    def test_selects_question_tool_without_replanning(self):
+        self.service._request_completion = lambda *_args, **_kwargs: (
+            {"tool_calls": [{"function": {
+                "name": "answer_itinerary_question",
+                "arguments": "{}",
+            }}]},
+            {},
+        )
+
+        intent = self.service.parse_intent("test", {}, [])
+
+        self.assertEqual(intent.intent, "question")
+
+    def test_selects_clarification_tool(self):
+        self.service._request_completion = lambda *_args, **_kwargs: (
+            {"tool_calls": [{"function": {
+                "name": "ask_for_clarification",
+                "arguments": json.dumps({"question": "Bạn muốn đi ngày nào?"}),
+            }}]},
+            {},
+        )
+
+        intent = self.service.parse_intent("test", {}, [])
+
+        self.assertTrue(intent.needs_clarification)
+        self.assertEqual(intent.clarification_question, "Bạn muốn đi ngày nào?")
 
     def test_semantic_classifier_keeps_only_known_confident_ids(self):
         response = {

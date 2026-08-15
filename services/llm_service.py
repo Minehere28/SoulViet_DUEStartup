@@ -9,18 +9,26 @@ from models.assistant_intent import AssistantIntent, GraphQueryPlan
 
 
 load_dotenv()
+load_dotenv(".env.example", override=False)
 
 
 class LLMService:
-    """OpenRouter intent parser and response writer with local fallbacks."""
+    """Groq intent parser and response writer with local fallbacks."""
 
     def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        self.api_key = (
+            os.getenv("GROQ_API_KEY", "").strip()
+            or os.getenv("GROQ_API_KEY_1", "").strip()
+            or os.getenv("GROQ_API_KEY_2", "").strip()
+        )
         self.model_id = os.getenv(
-            "OPENROUTER_MODEL",
-            "openai/gpt-5-mini",
+            "GROQ_MODEL",
+            "openai/gpt-oss-20b",
         ).strip()
-        self.url = "https://openrouter.ai/api/v1/chat/completions"
+        self.reasoning_effort = os.getenv(
+            "GROQ_REASONING_EFFORT", "medium"
+        ).strip()
+        self.url = "https://api.groq.com/openai/v1/chat/completions"
 
     @staticmethod
     def _compact_itinerary(itinerary):
@@ -60,14 +68,28 @@ class LLMService:
             for index, day in enumerate(itinerary)
         ]
 
-    def _complete(self, messages, temperature=0.2, max_tokens=700):
+    def _request_completion(
+        self,
+        messages,
+        temperature=0.2,
+        max_tokens=700,
+        tools=None,
+        tool_choice=None,
+    ):
+        body = {
+            "model": self.model_id,
+            "messages": messages,
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens,
+            "top_p": 1,
+            "reasoning_effort": self.reasoning_effort,
+        }
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         payload = json.dumps(
-            {
-                "model": self.model_id,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            body,
             ensure_ascii=False,
         ).encode("utf-8")
         request = Request(
@@ -76,17 +98,87 @@ class LLMService:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "http://127.0.0.1:8000",
-                "X-Title": "SoulViet AI",
+                "User-Agent": "SoulViet-RAG/1.0",
             },
             method="POST",
         )
         with urlopen(request, timeout=30) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
-        content = response_payload["choices"][0]["message"]["content"].strip()
+        message = response_payload["choices"][0]["message"]
+        return message, response_payload
+
+    def _complete(self, messages, temperature=0.2, max_tokens=700):
+        message, response_payload = self._request_completion(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        content = (message.get("content") or "").strip()
         if not content:
-            raise ValueError("OpenRouter returned empty content")
+            raise ValueError("Groq returned empty content")
         return content, response_payload
+
+    @staticmethod
+    def _assistant_tools():
+        intent_schema = AssistantIntent.model_json_schema()
+        properties = intent_schema["properties"]
+        modify_properties = {
+            key: value
+            for key, value in properties.items()
+            if key not in {"intent", "needs_clarification", "clarification_question"}
+        }
+        modify_schema = {
+            "type": "object",
+            "properties": modify_properties,
+            "additionalProperties": False,
+            "$defs": intent_schema.get("$defs", {}),
+        }
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "replan_itinerary",
+                    "description": (
+                        "Thay đổi hoặc tạo lại hành trình theo yêu cầu của người dùng. "
+                        "Dùng tool này cho mọi thay đổi về ngày, giờ, ngân sách, "
+                        "địa điểm, sở thích, bữa ăn hoặc giới hạn chuyến đi."
+                    ),
+                    "parameters": modify_schema,
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "answer_itinerary_question",
+                    "description": (
+                        "Trả lời câu hỏi chỉ đọc về hành trình hiện tại, không sửa lịch."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ask_for_clarification",
+                    "description": (
+                        "Hỏi lại khi thiếu thông tin quan trọng hoặc yêu cầu có nhiều "
+                        "cách hiểu dẫn tới các hành trình khác nhau."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string", "maxLength": 300}
+                        },
+                        "required": ["question"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ]
 
     @staticmethod
     def _json_object(content):
@@ -97,16 +189,13 @@ class LLMService:
         return json.loads(content[start:end + 1])
 
     def parse_intent(self, message, current_request, current_itinerary):
-        """Return a validated intent, or None so deterministic rules can run."""
+        """Let the model select a backend tool and validate its arguments."""
         if not self.api_key:
             return None
 
-        schema = AssistantIntent.model_json_schema()
         system_prompt = (
-            "Bạn là bộ phân tích yêu cầu cho SoulViet. Chỉ trả về một JSON object "
-            "đúng JSON Schema được cung cấp, không markdown, không giải thích. "
-            "Phân loại intent: question nếu người dùng chỉ hỏi về lịch hiện tại; "
-            "modify_itinerary nếu họ muốn thay đổi; unknown nếu thiếu thông tin. "
+            "Bạn là agent điều phối của SoulViet. Đọc toàn bộ yêu cầu và bắt buộc "
+            "chọn đúng một tool được cung cấp; không trả lời trực tiếp. "
             "Không tạo ID địa điểm. Chỉ dùng place_id có trong current_itinerary; "
             "với điểm mới hãy ghi tên thật vào graph_query.required_place_names. "
             "Các cách nói 'thêm X', 'cần có X', 'muốn có X', 'nhất định ghé X' "
@@ -121,17 +210,15 @@ class LLMService:
             "NEAR tối đa một hop, candidate_limit tối đa 90. "
             "Tách sở thích ăn uống vào meal_preferences; "
             "nếu chỉ đổi bữa ăn hoặc thêm cà phê thì đặt scope=meals_only. "
-            "Nếu câu lệnh mơ hồ, đặt "
-            "needs_clarification=true và viết một câu hỏi ngắn."
+            "Nếu câu lệnh mơ hồ, gọi ask_for_clarification."
         )
         user_payload = {
             "message": message,
             "current_request": current_request,
             "current_itinerary": self._compact_itinerary(current_itinerary),
-            "json_schema": schema,
         }
         try:
-            content, _ = self._complete(
+            response_message, _ = self._request_completion(
                 [
                     {"role": "system", "content": system_prompt},
                     {
@@ -141,10 +228,29 @@ class LLMService:
                 ],
                 temperature=0,
                 max_tokens=900,
+                tools=self._assistant_tools(),
+                tool_choice="required",
             )
-            return AssistantIntent.model_validate(
-                self._json_object(content)
-            )
+            tool_calls = response_message.get("tool_calls") or []
+            if len(tool_calls) != 1:
+                raise ValueError("LLM must select exactly one assistant tool")
+            function = tool_calls[0].get("function", {})
+            name = function.get("name")
+            arguments = json.loads(function.get("arguments") or "{}")
+            if name == "replan_itinerary":
+                return AssistantIntent.model_validate({
+                    "intent": "modify_itinerary",
+                    **arguments,
+                })
+            if name == "answer_itinerary_question":
+                return AssistantIntent(intent="question")
+            if name == "ask_for_clarification":
+                return AssistantIntent(
+                    intent="unknown",
+                    needs_clarification=True,
+                    clarification_question=arguments.get("question"),
+                )
+            raise ValueError(f"Unknown assistant tool: {name}")
         except (
             HTTPError,
             URLError,
@@ -282,7 +388,6 @@ class LLMService:
     def local_question_reply(message, itinerary):
         if not itinerary:
             return "Mình chưa có lịch trình hiện tại để đánh giá."
-        normalized = message.casefold()
         place_count = sum(
             sum(
                 place.get("item_type") != "meal"
@@ -301,38 +406,6 @@ class LLMService:
         )
         spend_min_text = f"{spend_min:,}".replace(",", ".")
         spend_max_text = f"{spend_max:,}".replace(",", ".")
-        if any(
-            phrase in normalized
-            for phrase in ("budget", "ngân sách", "chi phí", "bao nhiêu")
-        ):
-            return (
-                f"Chi phí ước tính của lịch hiện tại là "
-                f"{spend_min_text}–{spend_max_text} đồng/người."
-            )
-        if ("ngày nào" in normalized or "hôm nào" in normalized) and any(
-            phrase in normalized for phrase in ("xa", "di chuyển", "quãng đường")
-        ):
-            day_index, farthest = max(
-                enumerate(itinerary, start=1),
-                key=lambda item: float(item[1].get("total_distance_km") or 0),
-            )
-            return (
-                f"Ngày {day_index} di chuyển xa nhất, khoảng "
-                f"{float(farthest.get('total_distance_km') or 0):.1f} km."
-            )
-        if "trùng" in normalized:
-            ids = [
-                place.get("id")
-                for day in itinerary
-                for place in day.get("places", [])
-                if place.get("id")
-            ]
-            duplicate_count = len(ids) - len(set(ids))
-            return (
-                "Lịch hiện tại không bị trùng địa điểm."
-                if duplicate_count == 0
-                else f"Lịch hiện tại có {duplicate_count} địa điểm bị lặp."
-            )
         return (
             f"Lịch hiện tại có {len(itinerary)} ngày, {place_count} điểm tham quan, "
             f"tổng quãng đường khoảng {distance:.1f} km và chi phí ước tính "
@@ -346,7 +419,7 @@ class LLMService:
                 "answer": fallback,
                 "provider": "local_fallback",
                 "model": None,
-                "fallback_reason": "OPENROUTER_API_KEY is not configured",
+                "fallback_reason": "GROQ_API_KEY is not configured",
                 "usage": None,
             }
         system_prompt = (
@@ -375,7 +448,7 @@ class LLMService:
             )
             return {
                 "answer": answer,
-                "provider": "openrouter",
+                "provider": "groq",
                 "model": payload.get("model", self.model_id),
                 "fallback_reason": None,
                 "usage": payload.get("usage"),
@@ -404,7 +477,7 @@ class LLMService:
                 "answer": fallback,
                 "provider": "local_fallback",
                 "model": None,
-                "fallback_reason": "OPENROUTER_API_KEY is not configured",
+                "fallback_reason": "GROQ_API_KEY is not configured",
                 "usage": None,
             }
 
@@ -437,7 +510,7 @@ class LLMService:
             )
             return {
                 "answer": answer,
-                "provider": "openrouter",
+                "provider": "groq",
                 "model": response_payload.get("model", self.model_id),
                 "fallback_reason": None,
                 "usage": response_payload.get("usage"),

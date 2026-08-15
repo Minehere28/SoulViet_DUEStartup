@@ -63,6 +63,8 @@ cho mỗi bữa theo chi phí di chuyển OSRM của toàn tuyến. Timeline tr�
 
 ```json
 {
+  "user_id": "user-123",
+  "thread_id": "trip-da-nang-001",
   "message": "Ưu tiên biển, ít di chuyển và bỏ điểm đầu tiên ngày 1",
   "current_request": {
     "duration": 2,
@@ -74,25 +76,40 @@ cho mỗi bữa theo chi phí di chuyển OSRM của toàn tuyến. Timeline tr�
 }
 ```
 
-LLM chỉ tạo intent và graph query dạng JSON đã được Pydantic kiểm tra. Backend
-chọn seed node, có thể mở rộng quan hệ `NEAR` tối đa một hop, rồi tái sử dụng
-OSRM và OR-Tools để tạo lịch. `ItineraryValidator` kiểm tra lại giới hạn km,
-timeline, số điểm, địa điểm đóng cửa và trùng lặp trước khi LLM giải thích kết
-quả. Câu hỏi về lịch hiện tại không chạy lại route planner.
+Chatbot chạy bằng LangGraph theo vòng lặp `agent → tool → observation → agent`.
+`thread_id` ánh xạ tới SQLite checkpoint nên agent nhớ message, tool result và
+working state qua nhiều lượt. Long-term preference memory được lưu trong
+LangGraph SQLite Store theo namespace `user_id` và semantic retrieval tự động
+trước mỗi lượt. Frontend mẫu tự tạo và giữ hai ID này trong `localStorage`.
 
-Nếu OpenRouter thiếu key, timeout hoặc hết quota, các lệnh phổ biến vẫn được
-nhận diện bằng rule local. `current_itinerary` là tùy chọn nhưng cần được gửi
-để hiểu các tham chiếu như "điểm đầu tiên" hoặc trả lời về lịch hiện tại.
+Tool schema được sinh từ Pydantic. Các nhóm tool hiện có gồm đọc lịch/địa điểm,
+tìm kiếm graph, cập nhật trip settings, activity/category/meal preference,
+thêm/loại/thay/di chuyển/khóa địa điểm, replan, validate, commit/rollback và
+quản lý memory. Model không được tự tạo place ID mà phải lấy ID qua tool tìm kiếm.
+
+Mọi mutation chỉ ghi vào working state. `replan_itinerary` tái sử dụng graph,
+OSRM và OR-Tools rồi chạy `ItineraryValidator`; `commit_itinerary` từ chối bản
+nháp invalid hoặc partial. Vì vậy tool lỗi hay lịch không khả thi không ghi đè
+lịch đã commit. Nếu Groq thiếu key hoặc model không hỗ trợ tool-calling,
+endpoint trả `langgraph_unavailable` và không suy đoán bằng keyword.
 
 Biến môi trường tùy chọn:
 
 ```dotenv
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=openrouter/free
+GROQ_API_KEY=...
+GROQ_MODEL=openai/gpt-oss-20b
+GROQ_REASONING_EFFORT=low
+GROQ_MAX_COMPLETION_TOKENS=768
+GROQ_REASONING_EFFORT=medium
 OSRM_BASE_URL=http://router.project-osrm.org
 OSRM_TIMEOUT_SECONDS=15
 ROUTE_OPTIMIZER_TIME_LIMIT_MS=500
+SOULVIET_AGENT_DB_DIR=.soulviet
 ```
+
+`SOULVIET_AGENT_DB_DIR` chứa `checkpoints.sqlite3` (short-term/thread memory) và
+`memories.sqlite3` (long-term user memory). Embedding retrieval bản local dùng
+hash embedding deterministic, không gửi sở thích người dùng sang embedding API.
 
 ## API địa điểm và similarity động
 

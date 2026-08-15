@@ -212,6 +212,33 @@
 
                 <!-- Nội dung lịch trình -->
                 <div id="result" class="hidden space-y-6 fade-in">
+                    <!-- Chat luôn nằm trên, chỉ lịch sử tin nhắn cuộn -->
+                    <div class="bg-white rounded-2xl shadow-lg border border-slate-100 sticky top-4 z-20 overflow-hidden">
+                        <div class="px-5 pt-5 pb-4 border-b border-slate-100 bg-white">
+                            <div class="flex items-center justify-between gap-3 mb-3">
+                                <h3 class="font-bold text-slate-800 flex items-center">
+                                    <i class="fa-solid fa-comments mr-2 text-orange-500"></i>
+                                    Tùy chỉnh hành trình
+                                </h3>
+                                <span id="chat-status" class="text-xs text-slate-400">Agent sẵn sàng</span>
+                            </div>
+                            <div class="flex gap-2 sm:gap-3">
+                                <input id="chat-message" type="text"
+                                    autocomplete="off"
+                                    placeholder="Ví dụ: Thay điểm đầu tiên ngày 2 bằng một bảo tàng"
+                                    class="min-w-0 flex-1 px-4 py-3 border rounded-xl focus:ring-2 focus:ring-orange-500 outline-none">
+                                <button onclick="customizeTrip()" id="btn-chat"
+                                    class="shrink-0 bg-slate-800 hover:bg-slate-900 text-white font-semibold px-4 sm:px-5 rounded-xl transition">
+                                    <span class="hidden sm:inline">Gửi</span>
+                                    <i class="fa-solid fa-paper-plane sm:hidden"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="chat-messages"
+                            class="hidden max-h-72 overflow-y-auto overscroll-contain p-4 space-y-3 bg-slate-50 scroll-smooth"
+                            aria-live="polite"></div>
+                    </div>
+
                     <!-- Tóm tắt nhanh -->
                     <div class="bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
                         <h3 class="font-bold text-slate-800 mb-4 flex items-center">
@@ -223,29 +250,12 @@
                     </div>
 
                     <!-- Nội dung AI -->
-                    <div class="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 sticky top-4">
+                    <div class="bg-white rounded-2xl shadow-sm p-8 border border-slate-100">
                         <div id="ai-content" class="prose max-w-none text-slate-700">
                             <!-- JS chèn vào đây -->
                         </div>
                     </div>
 
-                    <div class="bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
-                        <h3 class="font-bold text-slate-800 mb-3">
-                            <i class="fa-solid fa-comments mr-2 text-orange-500"></i>
-                            Tùy chỉnh hành trình
-                        </h3>
-                        <div id="chat-answer"
-                            class="hidden mb-4 rounded-xl bg-orange-50 p-4 text-sm text-slate-700"></div>
-                        <div class="flex gap-3">
-                            <input id="chat-message" type="text"
-                                placeholder="Ví dụ: Đổi thành 3 ngày, tối đa 4 địa điểm mỗi ngày"
-                                class="flex-1 px-4 py-3 border rounded-xl focus:ring-2 focus:ring-orange-500 outline-none">
-                            <button onclick="customizeTrip()" id="btn-chat"
-                                class="bg-slate-800 hover:bg-slate-900 text-white font-semibold px-5 rounded-xl">
-                                Gửi
-                            </button>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -255,6 +265,10 @@
         const startDateInput = document.getElementById('start-date');
         let currentPlanRequest = null;
         let currentItinerary = [];
+        const soulVietUserId = localStorage.getItem('soulviet_user_id') || crypto.randomUUID();
+        const soulVietThreadId = localStorage.getItem('soulviet_thread_id') || crypto.randomUUID();
+        localStorage.setItem('soulviet_user_id', soulVietUserId);
+        localStorage.setItem('soulviet_thread_id', soulVietThreadId);
         let selectedBudget = 'standard';
         const budgetDailyLimits = { economy: 350000, standard: 700000, premium: 1400000 };
         startDateInput.value = new Date().toISOString().slice(0, 10);
@@ -450,31 +464,60 @@
             }
         }
 
+        function appendChatMessage(role, text) {
+            const container = document.getElementById('chat-messages');
+            const row = document.createElement('div');
+            const bubble = document.createElement('div');
+            const isUser = role === 'user';
+            row.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+            bubble.className = isUser
+                ? 'max-w-[88%] rounded-2xl rounded-br-md bg-slate-800 px-4 py-3 text-sm leading-6 text-white shadow-sm'
+                : 'max-w-[88%] rounded-2xl rounded-bl-md border border-orange-100 bg-white px-4 py-3 text-sm leading-6 text-slate-700 shadow-sm';
+            bubble.textContent = text;
+            row.appendChild(bubble);
+            container.appendChild(row);
+            container.classList.remove('hidden');
+            container.scrollTop = container.scrollHeight;
+        }
+
         async function customizeTrip() {
             const messageInput = document.getElementById('chat-message');
-            const answer = document.getElementById('chat-answer');
             const button = document.getElementById('btn-chat');
+            const status = document.getElementById('chat-status');
             const message = messageInput.value.trim();
             if (!currentPlanRequest || !message) {
                 alert('Hãy tạo lịch trình và nhập yêu cầu tùy chỉnh trước.');
                 return;
             }
 
+            appendChatMessage('user', message);
+            messageInput.value = '';
             button.disabled = true;
             button.classList.add('opacity-50');
+            messageInput.disabled = true;
+            status.textContent = 'Agent đang xử lý…';
+            status.className = 'text-xs font-medium text-orange-600';
             try {
                 const response = await fetch('/assistant/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message,
-                        current_request: currentPlanRequest,
+                      body: JSON.stringify({
+                          message,
+                          user_id: soulVietUserId,
+                          thread_id: soulVietThreadId,
+                          current_request: currentPlanRequest,
                         current_itinerary: currentItinerary
                     })
                 });
-                const payload = await response.json();
+                const responseText = await response.text();
+                let payload;
+                try {
+                    payload = JSON.parse(responseText);
+                } catch (_error) {
+                    throw new Error(responseText || `HTTP ${response.status}`);
+                }
                 if (!response.ok) {
-                    throw new Error(JSON.stringify(payload.detail));
+                    throw new Error(JSON.stringify(payload.detail || payload));
                 }
 
                 currentPlanRequest = payload.request;
@@ -494,16 +537,35 @@
                 updateBudgetControls();
                 startDateInput.value = payload.request.start_date;
                 renderItinerary(payload.itinerary);
-                answer.textContent = payload.answer;
-                answer.classList.remove('hidden');
-                messageInput.value = '';
+                appendChatMessage('assistant', payload.answer);
+                status.textContent = payload.requires_input
+                    ? 'Đang chờ bạn trả lời'
+                    : 'Đã cập nhật';
+                status.className = payload.requires_input
+                    ? 'text-xs font-medium text-amber-600'
+                    : 'text-xs font-medium text-emerald-600';
             } catch (error) {
+                appendChatMessage(
+                    'assistant',
+                    `Mình chưa xử lý được yêu cầu này: ${error.message}`
+                );
+                status.textContent = 'Có lỗi xảy ra';
+                status.className = 'text-xs font-medium text-red-600';
                 alert(`Không thể tùy chỉnh hành trình: ${error.message}`);
             } finally {
                 button.disabled = false;
                 button.classList.remove('opacity-50');
+                messageInput.disabled = false;
+                messageInput.focus();
             }
         }
+
+        document.getElementById('chat-message').addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                customizeTrip();
+            }
+        });
     </script>
 </body>
 

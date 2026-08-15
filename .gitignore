@@ -1,4 +1,5 @@
 myenv/
 .env
 __pycache__/
+.soulviet/
 *.py[cod]

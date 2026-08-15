@@ -1,5 +1,7 @@
 import math
 
+from utils.place_matching import place_categories
+
 
 class ScoringService:
     """Explainable recommendation score for the canonical graph schema."""
@@ -25,11 +27,7 @@ class ScoringService:
         if not preferences:
             return 1.0
 
-        categories = {
-            value.strip().casefold()
-            for value in place.get("activity_categories", [])
-            if value
-        }
+        categories = place_categories(place)
         if not categories:
             return 0.0
         return len(preferences & categories) / len(preferences)

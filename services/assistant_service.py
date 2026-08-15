@@ -497,55 +497,78 @@ class AssistantService:
         ):
             parsed_intent = AssistantIntent.model_validate(parsed_intent)
 
-        rule_updates, applied = self._extract_adjustments(
-            assistant_request.message,
-            assistant_request.current_request,
-        )
-        required_mentions = self.place_requirements.resolve(
-            assistant_request.message,
-            assistant_request.current_request.region,
-        )
-        if required_mentions:
+        # Compatibility for injected legacy adapters used by older integrations.
+        # The production LLMService always exposes parse_intent and never enters
+        # this deterministic branch.
+        legacy_adapter = not hasattr(self.llm, "parse_intent")
+        use_fallback = legacy_adapter or (parsed_intent is None)
+        rule_updates = {}
+        applied = []
+        mentioned_required_ids = set()
+        fallback_query = GraphQueryPlan()
+        fallback_meal_preferences = []
+        fallback_operations = []
+        requested_place_target = None
+        policy_label = None
+        if use_fallback:
+            rule_updates, applied = self._extract_adjustments(
+                assistant_request.message,
+                assistant_request.current_request,
+            )
+            required_mentions = self.place_requirements.resolve(
+                assistant_request.message,
+                assistant_request.current_request.region,
+            )
             mentioned_required_ids = {
                 place["id"] for place in required_mentions
             }
-            rule_updates["required_place_ids"] = sorted({
-                *assistant_request.current_request.required_place_ids,
-                *rule_updates.get("required_place_ids", []),
-                *mentioned_required_ids,
-            })
-            for place in required_mentions:
-                label = f"thêm địa điểm {place['name']}"
-                if label not in applied:
-                    applied.append(label)
-        else:
-            mentioned_required_ids = set()
-        fallback_query = self._fallback_graph_query(
-            assistant_request.message
-        )
-        fallback_meal_preferences = self._fallback_meal_preferences(
-            assistant_request.message
-        )
-        fallback_operations = self._fallback_operations(
-            assistant_request.message
-        )
-        requested_place_target = self._requested_place_target(
-            assistant_request.message
-        )
-
-        policy_label = self._policy_rebuild_label(
-            assistant_request.message
-        )
-
+            if required_mentions:
+                rule_updates["required_place_ids"] = sorted({
+                    *assistant_request.current_request.required_place_ids,
+                    *rule_updates.get("required_place_ids", []),
+                    *mentioned_required_ids,
+                })
+                for place in required_mentions:
+                    applied.append(f"thêm địa điểm {place['name']}")
+            fallback_query = self._fallback_graph_query(
+                assistant_request.message
+            )
+            fallback_meal_preferences = self._fallback_meal_preferences(
+                assistant_request.message
+            )
+            fallback_operations = self._fallback_operations(
+                assistant_request.message
+            )
+            requested_place_target = self._requested_place_target(
+                assistant_request.message
+            )
+            policy_label = self._policy_rebuild_label(
+                assistant_request.message
+            )
         if parsed_intent is None:
-            if (
+            if use_fallback and (
                 rule_updates
                 or fallback_query.is_active()
                 or fallback_meal_preferences
                 or fallback_operations
+                or policy_label
+                or self._question_like(assistant_request.message)
             ):
+                if policy_label:
+                    applied.append(policy_label)
                 parsed_intent = AssistantIntent(
-                    intent="modify_itinerary",
+                    intent=(
+                        "question"
+                        if self._question_like(assistant_request.message)
+                        and not (
+                            rule_updates
+                            or fallback_query.is_active()
+                            or fallback_meal_preferences
+                            or fallback_operations
+                            or policy_label
+                        )
+                        else "modify_itinerary"
+                    ),
                     graph_query=fallback_query,
                     scope=(
                         "meals_only"
@@ -556,22 +579,24 @@ class AssistantService:
                     meal_preferences=fallback_meal_preferences,
                     operations=fallback_operations,
                 )
-            elif policy_label:
-                applied.append(policy_label)
-                parsed_intent = AssistantIntent(
-                    intent="modify_itinerary",
-                )
-            elif self._question_like(assistant_request.message):
-                parsed_intent = AssistantIntent(intent="question")
             else:
-                parsed_intent = AssistantIntent(
-                    intent="unknown",
-                    needs_clarification=True,
-                    clarification_question=(
-                        "Bạn muốn hỏi về lịch hiện tại hay muốn thay đổi "
-                        "khu vực, hoạt động, thời gian hoặc quãng đường?"
+                return {
+                    "answer": (
+                        "Mình chưa thể hiểu và thực thi yêu cầu vì LLM tool-calling "
+                        "không khả dụng. Hãy kiểm tra GROQ_API_KEY và model có "
+                        "hỗ trợ tools."
                     ),
-                )
+                    "provider": "tool_call_unavailable",
+                    "model": None,
+                    "fallback_reason": "LLM did not return a valid tool call",
+                    "usage": None,
+                    "intent": "unknown",
+                    "applied_changes": [],
+                    "request": raw_current_request,
+                    "itinerary": current_itinerary,
+                    "query_metadata": None,
+                    "validation_report": None,
+                }
 
         if parsed_intent.intent == "question":
             if hasattr(self.llm, "answer_question"):
@@ -644,7 +669,7 @@ class AssistantService:
 
         query = self._merge_query_plans(
             parsed_intent.graph_query, fallback_query
-        )
+        ) if legacy_adapter else parsed_intent.graph_query
         persistent_constraints = {
             rule.category.casefold(): rule
             for rule in updated_request.category_constraints
@@ -836,16 +861,13 @@ class AssistantService:
                     "unresolved_required_place_names"
                 ] = resolved["unresolved_required_place_names"]
             if requested_place_target:
-                max_day_attractions = max(
-                    (
-                        sum(
-                            place.get("item_type") != "meal"
-                            for place in day.get("places", [])
-                        )
-                        for day in itinerary
-                    ),
-                    default=0,
-                )
+                max_day_attractions = max((
+                    sum(
+                        place.get("item_type") != "meal"
+                        for place in day.get("places", [])
+                    )
+                    for day in itinerary
+                ), default=0)
                 validation_report["metrics"][
                     "requested_place_target"
                 ] = requested_place_target

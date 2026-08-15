@@ -10,6 +10,21 @@ CATEGORY_ALIASES = {
     "tam linh": {"place of worship", "tam linh tin nguong"},
 }
 
+OUTDOOR_TYPES = {
+    "beach", "campground", "historical_landmark", "natural_feature",
+    "park", "scenic_spot",
+}
+INDOOR_TYPES = {
+    "art_gallery", "art_studio", "museum", "shopping_mall",
+    "performing_arts_theater", "movie_theater",
+}
+INTERACTIVE_KEYWORDS = {
+    "experience", "workshop", "cooking", "diving", "snorkeling",
+    "surfing", "kayak", "camping", "cycling", "hiking",
+    "trai nghiem", "nau an", "lan bien", "luot song", "cheo thuyen",
+    "cam trai", "dap xe", "leo nui",
+}
+
 
 def normalize_text(value):
     value = str(value or "").replace("đ", "d").replace("Đ", "D")
@@ -39,7 +54,7 @@ def place_types(place):
 
 
 def place_categories(place):
-    return {
+    categories = {
         str(value).strip().casefold()
         for value in (
             *place.get("activity_categories", []),
@@ -47,6 +62,20 @@ def place_categories(place):
         )
         if value
     }
+    types = place_types(place)
+    if types & OUTDOOR_TYPES:
+        categories.add("outdoor")
+    if types & INDOOR_TYPES:
+        categories.add("indoor")
+    searchable = normalize_text(" ".join((
+        place.get("name", ""),
+        place.get("description", ""),
+        *place.get("activities", []),
+        *place.get("activity_categories", []),
+    )))
+    if any(keyword in searchable for keyword in INTERACTIVE_KEYWORDS):
+        categories.add("interactive")
+    return categories
 
 
 def matches_category(place, category):

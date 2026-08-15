@@ -1,11 +1,11 @@
 from fastapi import APIRouter
 
 from models.assistant_request import AssistantRequest
-from services.assistant_service import AssistantService
+from services.langgraph_assistant_service import LangGraphAssistantService
 
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
-assistant_service = AssistantService()
+assistant_service = LangGraphAssistantService()
 
 
 @router.post("/chat")

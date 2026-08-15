@@ -13,7 +13,9 @@ from utils.opening_hours import (
     visit_start_windows,
     weekday_key,
 )
-from utils.place_matching import matches_category, normalize_text
+from utils.place_matching import (
+    matches_category, normalize_text, place_categories, place_types,
+)
 
 
 class ItineraryService:
@@ -304,28 +306,33 @@ class ItineraryService:
     @classmethod
     def _meal_preference_score(cls, place, preferences):
         types = cls._types(place)
-        searchable = " ".join((
+        searchable = normalize_text(" ".join((
             place.get("name", ""),
             place.get("description", ""),
             *types,
             *place.get("activities", []),
             *place.get("activity_categories", []),
-        )).casefold()
+        )))
         score = 0
         for preference in preferences:
-            if preference == "cafe" and types & cls.CAFE_TYPES:
+            normalized_preference = normalize_text(preference)
+            if normalized_preference == "cafe" and types & cls.CAFE_TYPES:
                 score += 4
-            elif preference == "seafood" and (
-                "seafood_restaurant" in types or "hải sản" in searchable
+            elif normalized_preference in {"seafood", "hai san"} and (
+                "seafood_restaurant" in types or "hai san" in searchable
             ):
                 score += 4
-            elif preference == "local_food" and (
+            elif normalized_preference in {
+                "local food", "local_food", "dac san", "am thuc dia phuong",
+            } and (
                 "vietnamese_restaurant" in types
-                or "địa phương" in searchable
-                or "đặc sản" in searchable
+                or "dia phuong" in searchable
+                or "dac san" in searchable
                 or "local" in searchable
             ):
                 score += 3
+            elif normalized_preference and normalized_preference in searchable:
+                score += 2
         return score
 
     @staticmethod
@@ -347,11 +354,15 @@ class ItineraryService:
     def _meal_candidates(
         self, restaurants, attractions, route_matrix, weekday,
         day_start_minutes, day_end_minutes, meal_preferences=None,
+        meal_requests=None,
     ):
         result = []
         meal_preferences = meal_preferences or []
+        meal_requests = meal_requests or []
         meal_slots = list(self.MEAL_SLOTS)
-        if "cafe" in meal_preferences:
+        if "cafe" in meal_preferences or any(
+            item.get("meal_slot") == "cafe_break" for item in meal_requests
+        ):
             meal_slots.append({
                 "key": "cafe_break",
                 "label": "Nghỉ cà phê",
@@ -365,6 +376,18 @@ class ItineraryService:
                 and meal["end"] <= day_end_minutes
             ):
                 continue
+            matching_requests = [
+                item for item in meal_requests
+                if item.get("meal_slot") == meal["key"]
+            ]
+            slot_preferences = list(dict.fromkeys([
+                *meal_preferences,
+                *(
+                    preference
+                    for item in matching_requests
+                    for preference in item.get("preferences", [])
+                ),
+            ]))
             eligible = []
             for restaurant in restaurants:
                 types = self._types(restaurant)
@@ -393,7 +416,7 @@ class ItineraryService:
                 )
                 eligible.append((
                     -self._meal_preference_score(
-                        restaurant, meal_preferences
+                        restaurant, slot_preferences
                     ),
                     self._food_priority(restaurant),
                     nearby_minutes,
@@ -411,6 +434,11 @@ class ItineraryService:
                     "meal_label": meal["label"],
                     "fixed_start_minutes": meal["start"],
                     "visit_duration_minutes": meal.get("duration", 90),
+                    "meal_request_preferences": list(dict.fromkeys(
+                        preference
+                        for item in matching_requests
+                        for preference in item.get("preferences", [])
+                    )),
                 })
         return result
 
@@ -731,6 +759,10 @@ class ItineraryService:
         meal_preferences=None,
         required_place_ids=None,
         reserved_place_ids=None,
+        meal_requests=None,
+        scoped_exclusions=None,
+        day_policy=None,
+        fill_idle_gaps=True,
     ):
         weekday = weekday_key(trip_date)
         day_places = []
@@ -741,10 +773,38 @@ class ItineraryService:
 
         reserved_place_ids = set(reserved_place_ids or [])
         required_place_ids = set(required_place_ids or [])
+        day_policy = day_policy or {}
+        max_places = min(
+            max_places,
+            int(day_policy.get("max_places") or max_places),
+        )
+
+        def allowed_for_day(place):
+            for scoped_filter in scoped_exclusions or []:
+                if place["id"] in set(scoped_filter.get("except_place_ids", [])):
+                    continue
+                excluded_types = {
+                    str(value).strip().casefold()
+                    for value in scoped_filter.get("place_types", [])
+                }
+                excluded_categories = {
+                    str(value).strip().casefold()
+                    for value in scoped_filter.get("activity_categories", [])
+                }
+                if excluded_types & place_types(place):
+                    return False
+                if excluded_categories & place_categories(place):
+                    return False
+            return True
+
         eligible_remaining = [
             place for place in remaining
             if place["id"] not in reserved_place_ids
             or place["id"] in required_place_ids
+        ]
+        eligible_remaining = [
+            place for place in eligible_remaining
+            if allowed_for_day(place) or place["id"] in required_place_ids
         ]
         attraction_candidates = self._day_attraction_candidates(
             eligible_remaining,
@@ -760,6 +820,7 @@ class ItineraryService:
         meal_candidates = self._meal_candidates(
             restaurants, attraction_candidates, route_matrix, weekday,
             day_start_minutes, day_end_minutes, meal_preferences,
+            meal_requests,
         )
         optimization_candidates = [*attraction_candidates, *meal_candidates]
         all_day_schedules.update({
@@ -857,27 +918,34 @@ class ItineraryService:
             travel_minutes_used += selection["travel_minutes"]
             current_minutes = selection["departure_minutes"]
 
-        (
-            gap_route,
-            gap_simulation,
-            gap_added_ids,
-            gap_removed_places,
-        ) = self.gap_filler.fill(
-            day_places,
-            remaining,
-            lambda route: self._simulate_day_route(
-                route,
-                weekday,
-                day_start_minutes,
-                day_end_minutes,
-                max_daily_distance,
-                route_matrix,
-                start_place,
-            ),
-            max_places,
-            reserved_place_ids,
-            required_place_ids,
-        )
+        gap_added_ids = []
+        gap_removed_places = []
+        gap_simulation = None
+        if fill_idle_gaps and day_policy.get("fill_if_idle", True):
+            (
+                _gap_route,
+                gap_simulation,
+                gap_added_ids,
+                gap_removed_places,
+            ) = self.gap_filler.fill(
+                day_places,
+                [
+                    place for place in remaining
+                    if allowed_for_day(place)
+                ],
+                lambda route: self._simulate_day_route(
+                    route,
+                    weekday,
+                    day_start_minutes,
+                    day_end_minutes,
+                    max_daily_distance,
+                    route_matrix,
+                    start_place,
+                ),
+                max_places,
+                reserved_place_ids,
+                required_place_ids,
+            )
         if gap_added_ids and gap_simulation is not None:
             day_places = gap_simulation["day_places"]
             timeline = gap_simulation["timeline"]
@@ -935,6 +1003,11 @@ class ItineraryService:
         candidate_priorities=None,
         meal_preferences=None,
         candidate_semantic_categories=None,
+        required_place_days=None,
+        meal_requests=None,
+        scoped_exclusions=None,
+        day_policies=None,
+        optimization_policy=None,
     ):
         day_start_minutes = time_to_minutes(
             user.day_start_time.strftime("%H:%M")
@@ -1070,10 +1143,22 @@ class ItineraryService:
             day_end_minutes,
             quota_required_ids,
         )
+        for place_id, requested_day in (required_place_days or {}).items():
+            day_index = int(requested_day) - 1
+            if day_index < 0 or day_index >= user.duration:
+                continue
+            for assigned in required_by_day.values():
+                assigned.discard(place_id)
+            required_by_day[day_index].add(place_id)
         days = []
         current_start = start_place
+        day_policy_map = {
+            int(item["day"]): item for item in (day_policies or [])
+        }
+        optimization_policy = optimization_policy or {}
         for day_index in range(user.duration):
             trip_date = user.start_date + timedelta(days=day_index)
+            day_number = day_index + 1
             days.append(
                 self._build_day(
                     candidates,
@@ -1092,6 +1177,16 @@ class ItineraryService:
                         required_by_day[index]
                         for index in range(day_index + 1, user.duration)
                     )),
+                    [
+                        item for item in (meal_requests or [])
+                        if int(item.get("day", 0)) == day_number
+                    ],
+                    [
+                        item for item in (scoped_exclusions or [])
+                        if int(item.get("day", 0)) == day_number
+                    ],
+                    day_policy_map.get(day_number, {}),
+                    optimization_policy.get("fill_idle_gaps", True),
                 )
             )
             used_restaurants = set(days[-1].pop("_used_restaurant_ids"))
