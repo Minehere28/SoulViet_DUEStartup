@@ -18,6 +18,7 @@ def request():
 
 class FakeAgent:
     available = True
+    provider_name = "gemini"
     model_id = "test-model"
 
     def invoke(self, **_kwargs):
@@ -30,11 +31,18 @@ class FakeAgent:
             "tool_call_count": 1,
             "committed": False,
             "dirty": False,
+            "unsupported_requests": [{
+                "capability": "meal_planning",
+                "request_summary": "thêm bữa tối đặc sản",
+                "reason": "MVP hiện chỉ có dữ liệu điểm tham quan",
+                "applied": False,
+            }],
         }
 
 
 class FailingAgent:
     available = True
+    provider_name = "gemini"
     model_id = "test-model"
 
     def invoke(self, **_kwargs):
@@ -47,6 +55,7 @@ class APITimeoutError(Exception):
 
 class TimeoutAgent:
     available = True
+    provider_name = "gemini"
     model_id = "test-model"
 
     def invoke(self, **_kwargs):
@@ -67,6 +76,10 @@ def test_service_exposes_thread_and_input_required_status():
     assert result["thread_id"] == "thread-a"
     assert result["requires_input"] is True
     assert result["agent"]["status"] == "input_required"
+    assert result["unsupported_requests"][0]["capability"] == "meal_planning"
+    assert result["agent"]["unsupported_requests"] == result[
+        "unsupported_requests"
+    ]
 
 
 def test_service_returns_json_payload_when_agent_call_fails():
@@ -80,9 +93,9 @@ def test_service_returns_json_payload_when_agent_call_fails():
 
     result = service.customize(payload)
 
-    assert result["provider"] == "groq_langgraph_error"
+    assert result["provider"] == "gemini_langgraph_error"
     assert result["fallback_reason"] == "RuntimeError"
-    assert result["agent"]["status"] == "error"
+    assert result["agent"]["status"] == "provider_error"
     assert result["agent"]["error"]["message"] == "boom"
 
 

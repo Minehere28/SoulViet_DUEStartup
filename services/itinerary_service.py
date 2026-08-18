@@ -359,10 +359,16 @@ class ItineraryService:
         result = []
         meal_preferences = meal_preferences or []
         meal_requests = meal_requests or []
-        meal_slots = list(self.MEAL_SLOTS)
-        if "cafe" in meal_preferences or any(
-            item.get("meal_slot") == "cafe_break" for item in meal_requests
-        ):
+        requested_slots = {
+            item.get("meal_slot")
+            for item in meal_requests
+            if item.get("meal_slot")
+        }
+        meal_slots = [
+            slot for slot in self.MEAL_SLOTS
+            if slot["key"] in requested_slots
+        ]
+        if "cafe_break" in requested_slots:
             meal_slots.append({
                 "key": "cafe_break",
                 "label": "Nghỉ cà phê",

@@ -59,6 +59,85 @@ def test_update_tool_only_changes_working_request(tmp_path):
     assert updates["dirty"] is True
 
 
+def test_location_focus_switches_stale_region_automatically(tmp_path):
+    executor = SoulVietToolExecutor(memory=AgentMemory(tmp_path))
+    state = {
+        "current_request": request_data(region="Đà Nẵng"),
+        "current_itinerary": [],
+    }
+
+    observation, updates = executor.execute(
+        "update_trip_settings",
+        {
+            "duration": 2,
+            "location_focus": "Hội An",
+            "location_mode": "strict",
+        },
+        state,
+    )
+
+    assert observation["data"]["locality_resolution"]["region"] == "Quảng Nam"
+    assert updates["working_request"]["region"] == "Quảng Nam"
+    assert updates["working_request"]["location_focus"] == "Hội An"
+
+
+def test_resolve_location_scope_reads_region_and_capacity_from_graph(tmp_path):
+    executor = SoulVietToolExecutor(memory=AgentMemory(tmp_path))
+
+    observation, updates = executor.execute(
+        "resolve_location_scope",
+        {"query": "Hội An"},
+        {"current_request": request_data(region="Đà Nẵng")},
+    )
+
+    assert updates == {}
+    assert observation["data"]["region"] == "Quảng Nam"
+    assert observation["data"]["attraction_candidates"] >= 2
+    assert "meal_candidates" not in observation["data"]
+
+
+def test_hoi_an_preflight_has_enough_candidates_for_two_days(tmp_path):
+    itinerary = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary,
+        memory=AgentMemory(tmp_path),
+    )
+    state = {
+        "current_request": request_data(region="Đà Nẵng"),
+        "current_itinerary": [],
+    }
+    _, changed = executor.execute("apply_trip_changes", {
+        "trip_settings": {
+            "duration": 2,
+            "location_focus": "Hội An",
+            "location_mode": "strict",
+        },
+    }, state)
+    state.update(changed)
+
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    report = replanned["validation_report"]
+    assert replanned["working_request"]["region"] == "Quảng Nam"
+    assert report["metrics"]["preflight_attraction_candidates"] >= 2
+    assert "empty_days" not in report["quality_violations"]
+    assert all(day["places"] for day in replanned["working_itinerary"])
+
+
+def test_planner_does_not_add_default_lunch_or_dinner(tmp_path):
+    itinerary = ItineraryService(routing=StableRouting())
+
+    result = itinerary.build(UserRequest.model_validate(request_data()))
+
+    meals = [
+        item
+        for day in result
+        for item in day.get("places", [])
+        if item.get("item_type") == "meal"
+    ]
+    assert meals == []
+
+
 def test_commit_requires_valid_working_itinerary(tmp_path):
     executor = SoulVietToolExecutor(memory=AgentMemory(tmp_path))
     state = {
@@ -263,7 +342,28 @@ def test_apply_trip_changes_rejects_unknown_fields():
         })
 
 
-def test_meal_request_is_scoped_to_day_and_slot(tmp_path):
+def test_category_constraint_requires_explicit_user_requirement_to_stay_hard(tmp_path):
+    executor = SoulVietToolExecutor(memory=AgentMemory(tmp_path))
+    state = {"current_request": request_data(), "current_itinerary": []}
+
+    _, inferred = executor.execute("set_category_constraint", {
+        "category": "văn hóa",
+        "min_count": 2,
+        "mode": "hard",
+        "explicitly_required": False,
+    }, state)
+    assert inferred["working_request"]["category_constraints"][0]["mode"] == "soft"
+
+    _, explicit = executor.execute("set_category_constraint", {
+        "category": "văn hóa",
+        "min_count": 2,
+        "mode": "hard",
+        "explicitly_required": True,
+    }, state)
+    assert explicit["working_request"]["category_constraints"][0]["mode"] == "hard"
+
+
+def test_legacy_meal_request_is_ignored_by_attractions_only_mvp(tmp_path):
     itinerary = ItineraryService(routing=StableRouting())
     executor = SoulVietToolExecutor(
         itinerary=itinerary, memory=AgentMemory(tmp_path)
@@ -284,17 +384,14 @@ def test_meal_request_is_scoped_to_day_and_slot(tmp_path):
     state.update(updates)
     _, replanned = executor.execute("replan_itinerary", {}, state)
 
-    dinner = [
+    meals = [
         item
-        for item in replanned["working_itinerary"][1]["places"]
+        for day in replanned["working_itinerary"]
+        for item in day["places"]
         if item.get("item_type") == "meal"
-        and item.get("meal_slot") == "dinner"
     ]
-    assert dinner
-    assert itinerary._meal_preference_score(dinner[0], ["local_food"]) > 0
-    assert replanned["validation_report"]["metrics"][
-        "unmet_meal_requests"
-    ] == []
+    assert meals == []
+    assert "meal_requests" not in replanned["working_constraints"]
 
 
 def test_day_scoped_spiritual_filter_keeps_explicit_exception(tmp_path):

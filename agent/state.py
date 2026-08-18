@@ -9,8 +9,9 @@ class SoulVietAgentState(TypedDict, total=False):
     thread_id: str
     current_request: dict
     current_itinerary: list[dict]
+    current_constraints: dict
     working_request: dict | None
-    working_constraints: dict
+    working_constraints: dict | None
     working_itinerary: list[dict] | None
     retrieved_memories: list[dict]
     validation_report: dict | None
@@ -22,3 +23,10 @@ class SoulVietAgentState(TypedDict, total=False):
     last_tool_observations: list[dict]
     auto_finalize: bool
     error: dict | None
+    turn_tool_call_count: int
+    required_tool_failures: int
+    repair_count: int
+    repair_history: list[dict]
+    outcome: str | None
+    failure_report: dict | None
+    unsupported_requests: list[dict]

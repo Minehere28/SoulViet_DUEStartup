@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "description": "End-to-end acceptance benchmark for SoulViet itinerary agent quality.",
+  "base_request": {
+    "duration": 3,
+    "vibe": "Trải nghiệm đa dạng",
+    "region": "Đà Nẵng",
+    "budget_level": "standard",
+    "max_places_per_day": 5,
+    "max_daily_distance_km": 30,
+    "preferred_activities": [],
+    "start_date": "2026-08-18",
+    "day_start_time": "08:00",
+    "day_end_time": "21:00"
+  },
+  "cases": [
+    {
+      "id": "hoi_an_autoplan_without_clarification",
+      "description": "A locality request must become a complete local itinerary, not an ID/name clarification.",
+      "request_overrides": {
+        "duration": 2,
+        "region": "Quảng Nam",
+        "max_daily_distance_km": 20
+      },
+      "prompt": "Tôi muốn đi chơi Hội An trong 2 ngày. Hãy tự lên lịch trình tập trung ở Hội An, ưu tiên phố cổ, trải nghiệm địa phương và ẩm thực; đừng hỏi tôi ID hay địa điểm cụ thể.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "duration": 2,
+        "region": "Quảng Nam",
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "min_attractions_per_day": 1,
+        "locality_terms": ["hoi an"],
+        "min_locality_ratio": 0.9,
+        "max_daily_distance_km": 20,
+        "max_daily_travel_minutes": 120,
+        "forbidden_answer_substrings": [
+          "id địa điểm",
+          "place id",
+          "địa điểm cụ thể",
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "hoi_an_switches_stale_danang_region",
+      "description": "A Hội An request must override a stale Đà Nẵng region from the current plan.",
+      "request_overrides": {
+        "duration": 2,
+        "region": "Đà Nẵng",
+        "max_daily_distance_km": 20
+      },
+      "prompt": "Tôi muốn đi chơi Hội An trong 2 ngày. Hãy tự lên lịch tập trung hoàn toàn ở Hội An, ưu tiên phố cổ, trải nghiệm địa phương và ẩm thực.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "duration": 2,
+        "region": "Quảng Nam",
+        "validation_status": "success",
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "min_attractions_per_day": 1,
+        "locality_terms": ["hoi an"],
+        "min_locality_ratio": 1.0,
+        "max_daily_distance_km": 20,
+        "forbidden_answer_substrings": [
+          "id địa điểm",
+          "địa điểm cụ thể",
+          "empty_days",
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "hoi_an_short_natural_request",
+      "description": "A short natural locality prompt should still trigger autonomous planning.",
+      "request_overrides": {
+        "duration": 2,
+        "region": "Quảng Nam",
+        "max_daily_distance_km": 20
+      },
+      "prompt": "Cuối tuần này mình chỉ muốn đi chơi quanh Hội An thôi, bạn tự sắp xếp lịch nhẹ nhàng giúp mình nhé.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "locality_terms": ["hoi an"],
+        "min_locality_ratio": 0.9,
+        "max_daily_distance_km": 20,
+        "forbidden_answer_substrings": [
+          "id địa điểm",
+          "địa điểm cụ thể",
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "repair_partial_and_commit",
+      "description": "A feasible global optimization should self-repair and commit instead of exposing a partial draft.",
+      "prompt": "Hãy xem lại toàn bộ lịch trình, bỏ các điểm tâm linh, tránh trùng địa điểm, giảm thời gian di chuyển và tự bổ sung điểm phù hợp nếu còn trống. Hãy tự xử lý để trả lại lịch hoàn chỉnh.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_status": "success",
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "excluded_types": ["place_of_worship", "temple", "pagoda"],
+        "max_daily_distance_km": 30,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "reorder_only_reduces_travel",
+      "description": "Reordering must preserve the attraction set and never make travel worse.",
+      "prompt": "Giữ nguyên tất cả địa điểm tham quan đã có, chỉ sắp xếp lại giữa các ngày và trong từng ngày để tổng quãng đường di chuyển là ít nhất.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "preserve_initial_attractions": true,
+        "no_duplicate_places": true,
+        "max_total_distance_ratio_vs_initial": 1.0,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "compound_remove_add_exclude_optimize",
+      "description": "All independent clauses in a compound request must be executed together.",
+      "prompt": "Bỏ điểm đầu tiên ngày 1, thêm Bà Nà Hills vào ngày 2, bỏ hết các chùa trong toàn bộ chuyến đi và sắp xếp lại lịch trình sao cho thời gian di chuyển ít nhất có thể.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "removed_initial_positions": [
+          {"day": 1, "position": 1, "item_type": "attraction"}
+        ],
+        "required_places": [
+          {"query": "ba na hills", "day": 2}
+        ],
+        "excluded_types": ["place_of_worship", "temple", "pagoda"],
+        "max_daily_distance_km": 30,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "day_themes_without_spiritual_places",
+      "description": "A multi-day themed request should be planned without asking for named POIs.",
+      "prompt": "Tôi đi 3 ngày ở Đà Nẵng. Ngày 1 ưu tiên biển và các điểm gần nhau, ngày 2 ưu tiên văn hóa nhưng không đi chùa, ngày 3 ưu tiên ẩm thực. Đừng để lịch trình quá dày và hạn chế thời gian di chuyển.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "duration": 3,
+        "region": "Đà Nẵng",
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "max_attractions_per_day": 4,
+        "excluded_types": ["place_of_worship", "temple", "pagoda"],
+        "max_daily_distance_km": 30,
+        "max_daily_travel_minutes": 150,
+        "forbidden_answer_substrings": [
+          "id địa điểm",
+          "địa điểm cụ thể",
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "quang_nam_four_day_quality",
+      "description": "Duration, region, exclusions, diversity and route quality must hold together.",
+      "request_overrides": {
+        "region": "Quảng Nam"
+      },
+      "prompt": "Đổi chuyến đi thành 4 ngày ở Quảng Nam, ưu tiên thiên nhiên, biển và trải nghiệm địa phương. Không đi các điểm tâm linh, không lặp lại địa điểm, mỗi ngày vừa phải và không có thời gian chờ dài giữa các hoạt động.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "duration": 4,
+        "region": "Quảng Nam",
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "max_attractions_per_day": 5,
+        "excluded_types": ["place_of_worship", "temple", "pagoda"],
+        "max_daily_distance_km": 30,
+        "max_daily_travel_minutes": 150,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "replace_indoor_with_outdoor",
+      "description": "Category replacement must remove indoor attractions and keep a complete route.",
+      "prompt": "Tôi không muốn đi các điểm tham quan trong nhà, hãy thay chúng bằng những địa điểm ngoài trời phù hợp và gần các điểm còn lại.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "no_duplicate_places": true,
+        "excluded_categories": ["indoor"],
+        "min_category_counts": {"outdoor": 1},
+        "max_daily_distance_km": 30,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "local_food_dinner_day_two",
+      "description": "A scoped meal request must be fulfilled on the requested day and slot.",
+      "request_overrides": {
+        "region": "Quảng Nam"
+      },
+      "prompt": "Thêm một quán ăn đặc sản Quảng Nam vào buổi tối ngày 2, chọn chỗ tiện đường với lịch trình trong ngày.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "required_meals": [
+          {"day": 2, "meal_slot": "dinner"}
+        ],
+        "max_daily_distance_km": 30,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "lighten_day_one_locally",
+      "description": "A lighter day must remove at least one attraction and reduce or preserve travel cost.",
+      "prompt": "Ngày 1 đang hơi nặng. Hãy bỏ bớt một địa điểm ít quan trọng và chỉ giữ các điểm gần nhau để ngày đầu nhẹ nhàng hơn.",
+      "expect": {
+        "provider": "gemini_langgraph",
+        "committed": true,
+        "requires_input": false,
+        "validation_acceptable": true,
+        "day_attraction_delta_max": {"1": -1},
+        "max_day_distance_ratio_vs_initial": {"1": 1.0},
+        "no_duplicate_places": true,
+        "forbidden_answer_substrings": [
+          "bản nháp nhưng chưa commit",
+          "partial"
+        ]
+      }
+    }
+  ]
+}

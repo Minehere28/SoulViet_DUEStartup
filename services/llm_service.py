@@ -9,7 +9,6 @@ from models.assistant_intent import AssistantIntent, GraphQueryPlan
 
 
 load_dotenv()
-load_dotenv(".env.example", override=False)
 
 
 class LLMService:

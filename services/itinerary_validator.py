@@ -1,16 +1,19 @@
 from utils.opening_hours import time_to_minutes
 from utils.place_matching import matches_category, place_categories, place_types
+from services.locality_service import ResolvedLocality
 
 
 class ItineraryValidator:
     """Check postconditions independently from the route optimizer."""
 
     @staticmethod
-    def validate(itinerary, user):
+    def validate(itinerary, user, graph=None):
         hard_violations = []
         soft_warnings = []
         seen = set()
         attraction_count = 0
+        locality_direct_count = 0
+        locality_in_boundary_count = 0
         preference_matched_count = 0
         meal_count = 0
         supporting_count = 0
@@ -33,6 +36,18 @@ class ItineraryValidator:
             for value in user.preferred_activities
             if value.strip()
         }
+        locality = None
+        if user.location_focus and graph is not None:
+            locality = ResolvedLocality.resolve(
+                (
+                    place for place in graph.get_all_places()
+                    if place.get("region") == user.region
+                ),
+                user.location_focus,
+                user.location_mode,
+                user.location_radius_km,
+                neighbor_lookup=graph.get_neighbors,
+            )
 
         day_start = time_to_minutes(user.day_start_time.strftime("%H:%M"))
         day_end = time_to_minutes(user.day_end_time.strftime("%H:%M"))
@@ -74,6 +89,9 @@ class ItineraryValidator:
                     meal_count += 1
                 else:
                     attraction_count += 1
+                    if locality is not None:
+                        locality_direct_count += int(locality.is_direct(place))
+                        locality_in_boundary_count += int(locality.contains(place))
                     day_attractions += 1
                     brand_key = place.get("brand_key")
                     if brand_key:
@@ -116,6 +134,12 @@ class ItineraryValidator:
 
         valid = not hard_violations
         quality_violations = []
+        locality_outside_count = attraction_count - locality_in_boundary_count
+        if locality is not None and not locality.found:
+            hard_violations.append("locality_not_found")
+        elif locality is not None and locality_outside_count:
+            hard_violations.append("locality_focus_violated")
+        valid = not hard_violations
         if attraction_count == 0:
             quality_violations.append("no_attractions")
         if duplicate_brands:
@@ -206,6 +230,17 @@ class ItineraryValidator:
                 ),
                 "total_distance_km": round(
                     sum(day["total_distance_km"] for day in itinerary), 2
+                ),
+                "location_focus": user.location_focus,
+                "locality_direct_ratio": round(
+                    locality_direct_count / attraction_count, 3
+                ) if attraction_count and locality is not None else (
+                    1.0 if locality is None else 0.0
+                ),
+                "locality_in_boundary_ratio": round(
+                    locality_in_boundary_count / attraction_count, 3
+                ) if attraction_count and locality is not None else (
+                    1.0 if locality is None else 0.0
                 ),
             },
         }

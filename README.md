@@ -83,24 +83,34 @@ LangGraph SQLite Store theo namespace `user_id` và semantic retrieval tự đ�
 trước mỗi lượt. Frontend mẫu tự tạo và giữ hai ID này trong `localStorage`.
 
 Tool schema được sinh từ Pydantic. Các nhóm tool hiện có gồm đọc lịch/địa điểm,
-tìm kiếm graph, cập nhật trip settings, activity/category/meal preference,
+tìm kiếm graph, cập nhật trip settings và activity/category preference,
 thêm/loại/thay/di chuyển/khóa địa điểm, replan, validate, commit/rollback và
 quản lý memory. Model không được tự tạo place ID mà phải lấy ID qua tool tìm kiếm.
 
 Mọi mutation chỉ ghi vào working state. `replan_itinerary` tái sử dụng graph,
 OSRM và OR-Tools rồi chạy `ItineraryValidator`; `commit_itinerary` từ chối bản
 nháp invalid hoặc partial. Vì vậy tool lỗi hay lịch không khả thi không ghi đè
-lịch đã commit. Nếu Groq thiếu key hoặc model không hỗ trợ tool-calling,
+lịch đã commit. Agent thử provider theo thứ tự Gemini, từng Groq key, Mistral,
+SambaNova rồi Cerebras. Nếu tất cả đều thiếu key hoặc không hỗ trợ tool-calling,
 endpoint trả `langgraph_unavailable` và không suy đoán bằng keyword.
 
 Biến môi trường tùy chọn:
 
 ```dotenv
-GROQ_API_KEY=...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_MAX_COMPLETION_TOKENS=768
+GROQ_API_KEY_1=...
+GROQ_API_KEY_2=...
 GROQ_MODEL=openai/gpt-oss-20b
 GROQ_REASONING_EFFORT=low
 GROQ_MAX_COMPLETION_TOKENS=768
-GROQ_REASONING_EFFORT=medium
+SAMBANOVA_API_KEY=...
+SAMBANOVA_MODEL=gpt-oss-120b
+CEREBRAS_API_KEY=...
+CEREBRAS_MODEL=gpt-oss-120b
+MISTRAL_API_KEY=...
+MISTRAL_MODEL=mistral-small-latest
 OSRM_BASE_URL=http://router.project-osrm.org
 OSRM_TIMEOUT_SECONDS=15
 ROUTE_OPTIMIZER_TIME_LIMIT_MS=500
@@ -129,7 +139,7 @@ python -m scripts.build_graph
 
 Mặc định:
 
-- Input: `new_data_soulviet/new_data.csv`
+- Input: `new_data_soulviet/data-tourist-attraction.csv`
 - Output: `graph.pt`
 - Ngưỡng cạnh `NEAR`: 2 km
 

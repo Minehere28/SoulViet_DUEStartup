@@ -520,30 +520,38 @@
                     throw new Error(JSON.stringify(payload.detail || payload));
                 }
 
-                currentPlanRequest = payload.request;
-                currentItinerary = payload.itinerary;
-                document.getElementById('duration').value = payload.request.duration;
-                document.getElementById('region').value = payload.request.region;
-                document.getElementById('vibe').value = payload.request.vibe;
-                document.getElementById('max-places').value =
-                    payload.request.max_places_per_day;
-                document.getElementById('start-name').value =
-                    payload.request.start_name || 'Khách sạn';
-                document.getElementById('start-lat').value =
-                    payload.request.start_lat ?? '';
-                document.getElementById('start-lng').value =
-                    payload.request.start_lng ?? '';
-                selectedBudget = payload.request.budget_level || 'standard';
-                updateBudgetControls();
-                startDateInput.value = payload.request.start_date;
-                renderItinerary(payload.itinerary);
+                const agentStatus = payload.agent?.status || 'completed';
+                if (agentStatus === 'committed') {
+                    currentPlanRequest = payload.request;
+                    currentItinerary = payload.itinerary;
+                    document.getElementById('duration').value = payload.request.duration;
+                    document.getElementById('region').value = payload.request.region;
+                    document.getElementById('vibe').value = payload.request.vibe;
+                    document.getElementById('max-places').value =
+                        payload.request.max_places_per_day;
+                    document.getElementById('start-name').value =
+                        payload.request.start_name || 'Khách sạn';
+                    document.getElementById('start-lat').value =
+                        payload.request.start_lat ?? '';
+                    document.getElementById('start-lng').value =
+                        payload.request.start_lng ?? '';
+                    selectedBudget = payload.request.budget_level || 'standard';
+                    updateBudgetControls();
+                    startDateInput.value = payload.request.start_date;
+                    renderItinerary(payload.itinerary);
+                }
                 appendChatMessage('assistant', payload.answer);
-                status.textContent = payload.requires_input
-                    ? 'Đang chờ bạn trả lời'
-                    : 'Đã cập nhật';
-                status.className = payload.requires_input
-                    ? 'text-xs font-medium text-amber-600'
-                    : 'text-xs font-medium text-emerald-600';
+                const statusLabels = {
+                    committed: ['Đã cập nhật', 'text-xs font-medium text-emerald-600'],
+                    completed: ['Đã trả lời', 'text-xs font-medium text-sky-600'],
+                    input_required: ['Đang chờ bạn trả lời', 'text-xs font-medium text-amber-600'],
+                    infeasible: ['Chưa thể áp dụng', 'text-xs font-medium text-amber-700'],
+                    tool_error: ['Không thể áp dụng', 'text-xs font-medium text-red-600'],
+                    provider_error: ['Lỗi nhà cung cấp', 'text-xs font-medium text-red-600'],
+                };
+                const displayStatus = statusLabels[agentStatus] || statusLabels.completed;
+                status.textContent = displayStatus[0];
+                status.className = displayStatus[1];
             } catch (error) {
                 appendChatMessage(
                     'assistant',

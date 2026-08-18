@@ -20,6 +20,7 @@ RegionName = Literal[
 
 
 BudgetLevel = Literal["economy", "standard", "premium"]
+LocationMode = Literal["strict", "nearby"]
 
 
 class CategoryConstraint(BaseModel):
@@ -102,6 +103,14 @@ class UserRequest(BaseModel):
         max_length=50,
         description="Place IDs explicitly removed by the user.",
     )
+    location_focus: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=120,
+        description="Locality inside the selected region, for example Hoi An.",
+    )
+    location_mode: LocationMode = Field(default="strict")
+    location_radius_km: float = Field(default=8.0, gt=0, le=50)
     required_place_ids: list[str] = Field(
         default_factory=list,
         max_length=20,

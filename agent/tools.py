@@ -5,11 +5,13 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.user_request import (
-    BudgetLevel, CategoryConstraint, RegionName, UserRequest, VibeName,
+    BudgetLevel, CategoryConstraint, LocationMode, RegionName, UserRequest,
+    VibeName,
 )
 from services.graph_query_service import GraphQueryService
 from services.itinerary_service import ItineraryService
 from services.itinerary_validator import ItineraryValidator
+from services.locality_service import ResolvedLocality
 from models.assistant_intent import GraphQueryPlan
 from utils.place_matching import normalize_text, place_categories, place_types
 
@@ -68,11 +70,32 @@ class SearchPlacesInput(BaseModel):
         return values
 
 
+class LocationScopeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(
+        min_length=2,
+        max_length=120,
+        description="Destination/locality text extracted from the user's request.",
+    )
+
+
 class UpdateTripInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     duration: int | None = Field(default=None, ge=1, le=14)
     vibe: VibeName | None = None
     region: RegionName | None = None
+    location_focus: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=120,
+        description=(
+            "Locality extracted from the user's destination request. The "
+            "executor validates it against graph data and synchronizes region."
+        ),
+    )
+    location_mode: LocationMode | None = None
+    location_radius_km: float | None = Field(default=None, gt=0, le=50)
+    clear_location_focus: bool = False
     budget_level: BudgetLevel | None = None
     max_places_per_day: int | None = Field(default=None, ge=1, le=8)
     max_daily_distance_km: float | None = Field(default=None, gt=0, le=100)
@@ -85,7 +108,7 @@ class UpdateTripInput(BaseModel):
 
     @model_validator(mode="after")
     def require_change(self):
-        if not self.model_dump(exclude_none=True):
+        if not self.model_dump(exclude_none=True, exclude_defaults=True):
             raise ValueError("At least one trip setting is required")
         return self
 
@@ -139,13 +162,44 @@ class ClarificationInput(BaseModel):
     question: str = Field(min_length=3, max_length=300)
 
 
+class UnsupportedRequestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    capability: str = Field(pattern="^meal_planning$")
+    request_summary: str = Field(
+        min_length=3,
+        max_length=300,
+        description=(
+            "A short Vietnamese summary of the unsupported part of the "
+            "user's request, without inventing places or results."
+        ),
+    )
+
+
 class CategoryConstraintInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    category: str = Field(min_length=1, max_length=120)
+    category: str = Field(
+        min_length=1,
+        max_length=120,
+        description="Category requested or preferred by the user.",
+    )
     min_count: int = Field(default=0, ge=0, le=50)
     max_count: int | None = Field(default=None, ge=0, le=50)
     target_count: int | None = Field(default=None, ge=0, le=50)
-    mode: str = Field(default="hard", pattern="^(hard|soft)$")
+    mode: str = Field(
+        default="soft",
+        pattern="^(hard|soft)$",
+        description=(
+            "Use soft for preferences. Use hard only when the user explicitly "
+            "requires an exact/minimum/maximum category count."
+        ),
+    )
+    explicitly_required: bool = Field(
+        default=False,
+        description=(
+            "True only when the user explicitly made this category count "
+            "mandatory; never infer it from words such as prefer or like."
+        ),
+    )
 
 
 class MealPreferencesInput(BaseModel):
@@ -268,10 +322,6 @@ class ApplyTripChangesInput(BaseModel):
     category_constraints: list[CategoryConstraintInput] | None = Field(
         default_factory=list, max_length=10
     )
-    meal_preferences: MealPreferencesInput | None = None
-    meal_requests: list[MealRequestInput] | None = Field(
-        default_factory=list, max_length=14
-    )
     add_places: list[AddPlaceInput] | None = Field(default_factory=list, max_length=10)
     remove_places: list[RemoveItemInput] | None = Field(default_factory=list, max_length=10)
     replacements: list[ReplacePlaceInput] | None = Field(default_factory=list, max_length=10)
@@ -292,10 +342,24 @@ class ApplyTripChangesInput(BaseModel):
     @classmethod
     def clean_null_lists(cls, values):
         if isinstance(values, dict):
+            values = dict(values)
+            # Tool-calling models sometimes flatten UpdateTripInput into the
+            # outer object. Normalize that equivalent shape transactionally.
+            flat_trip_settings = {
+                field: values.pop(field)
+                for field in list(values)
+                if field in UpdateTripInput.model_fields
+            }
+            if flat_trip_settings:
+                nested = dict(values.get("trip_settings") or {})
+                values["trip_settings"] = {
+                    **flat_trip_settings,
+                    **nested,
+                }
             list_fields = [
                 "category_constraints", "add_places", "remove_places",
                 "replacements", "excluded_place_types", "excluded_activity_categories",
-                "meal_requests", "scoped_exclusions", "day_policies"
+                "scoped_exclusions", "day_policies"
             ]
             for field in list_fields:
                 if values.get(field) is None:
@@ -339,6 +403,11 @@ def get_place_details(place_id: str):
 @tool(args_schema=SearchPlacesInput)
 def search_places(query: str, types=None, activity_categories=None, minimum_rating=4, limit=10):
     """Tìm địa điểm trong graph để lấy ID thật trước khi thêm hoặc thay thế."""
+
+
+@tool(args_schema=LocationScopeInput)
+def resolve_location_scope(query: str):
+    """Tra graph để phân giải locality sang region và kiểm tra nguồn candidate thật."""
 
 
 @tool(args_schema=UpdateTripInput)
@@ -436,6 +505,11 @@ def ask_user_clarification(question: str):
     """Yêu cầu người dùng làm rõ khi thiếu một quyết định bắt buộc."""
 
 
+@tool(args_schema=UnsupportedRequestInput)
+def report_unsupported_request(capability: str, request_summary: str):
+    """Ghi nhận phần yêu cầu LLM đã hiểu nhưng MVP chưa hỗ trợ; không sửa lịch."""
+
+
 @tool(args_schema=EmptyInput)
 def list_user_memories():
     """Liệt kê các sở thích dài hạn mà SoulViet đang nhớ về người dùng."""
@@ -457,6 +531,7 @@ EXECUTOR_TOOLS = [
     get_day_details,
     get_place_details,
     search_places,
+    resolve_location_scope,
     update_trip_settings,
     set_activity_preferences,
     set_category_constraint,
@@ -476,6 +551,7 @@ EXECUTOR_TOOLS = [
     commit_itinerary,
     rollback_working_changes,
     ask_user_clarification,
+    report_unsupported_request,
     list_user_memories,
     save_user_memory,
     forget_user_memory,
@@ -488,8 +564,10 @@ AGENT_TOOLS = [
     get_day_details,
     get_place_details,
     search_places,
+    resolve_location_scope,
     apply_trip_changes,
     ask_user_clarification,
+    report_unsupported_request,
     list_user_memories,
     save_user_memory,
     forget_user_memory,
@@ -516,10 +594,6 @@ class SoulVietToolExecutor:
                 place.get("item_type") != "meal"
                 for day in itinerary for place in day.get("places", [])
             ),
-            "meal_count": sum(
-                place.get("item_type") == "meal"
-                for day in itinerary for place in day.get("places", [])
-            ),
             "total_distance_km": round(sum(
                 float(day.get("total_distance_km") or 0) for day in itinerary
             ), 2),
@@ -537,7 +611,10 @@ class SoulVietToolExecutor:
 
     @staticmethod
     def _working_constraints(state):
-        return dict(state.get("working_constraints") or {})
+        draft = state.get("working_constraints")
+        if draft is not None:
+            return dict(draft)
+        return dict(state.get("current_constraints") or {})
 
     def execute(self, name, args, state):
         handler = getattr(self, f"_tool_{name}", None)
@@ -602,11 +679,86 @@ class SoulVietToolExecutor:
             })
         return self._ok("search_places", items, f"Tìm thấy {len(items)} địa điểm"), {}
 
+    def _tool_resolve_location_scope(self, args, _state):
+        scope = ResolvedLocality.resolve_scope(
+            self.graph.get_all_places(), args["query"]
+        )
+        region = scope.get("region")
+        if region:
+            regional_places = [
+                place for place in self.graph.get_all_places()
+                if place.get("region") == region
+            ]
+            locality = ResolvedLocality.resolve(
+                regional_places, args["query"], "strict", 8,
+                neighbor_lookup=self.graph.get_neighbors,
+            )
+            scoped_places = locality.filter(regional_places)
+            scope["attraction_candidates"] = sum(
+                self.itinerary._is_attraction(place)
+                and not self.itinerary._is_food_place(place)
+                and float(place.get("rating") or 0) >= 4
+                for place in scoped_places
+            )
+            nearby = ResolvedLocality.resolve(
+                regional_places, args["query"], "nearby", 8,
+                neighbor_lookup=self.graph.get_neighbors,
+            )
+            scope["nearby_attraction_candidates"] = sum(
+                self.itinerary._is_attraction(place)
+                and not self.itinerary._is_food_place(place)
+                and float(place.get("rating") or 0) >= 4
+                for place in nearby.filter(regional_places)
+            )
+        else:
+            scope["attraction_candidates"] = 0
+            scope["nearby_attraction_candidates"] = 0
+        return self._ok(
+            "resolve_location_scope",
+            scope,
+            (
+                f"Đã phân giải {args['query']} sang {region}"
+                if region else f"Chưa phân giải được {args['query']}"
+            ),
+        ), {}
+
     def _tool_update_trip_settings(self, args, state):
+        args = dict(args)
         values = self._working_request(state)
         old_region = values.get("region")
+        old_focus = values.get("location_focus")
+        clear_focus = bool(args.pop("clear_location_focus", False))
+        locality_resolution = None
+        requested_focus = args.get("location_focus")
+        if requested_focus and not clear_focus:
+            locality_resolution = ResolvedLocality.resolve_scope(
+                self.graph.get_all_places(), requested_focus
+            )
+            resolved_region = locality_resolution.get("region")
+            explicit_region = args.get("region")
+            if locality_resolution.get("ambiguous_regions"):
+                choices = ", ".join(locality_resolution["ambiguous_regions"])
+                raise ValueError(
+                    f"Locality {requested_focus!r} is ambiguous across: {choices}"
+                )
+            if not resolved_region:
+                raise ValueError(
+                    f"Unknown locality in the place graph: {requested_focus}"
+                )
+            if explicit_region and explicit_region != resolved_region:
+                raise ValueError(
+                    f"Locality {requested_focus!r} belongs to {resolved_region}, "
+                    f"not {explicit_region}"
+                )
+            args["region"] = resolved_region
         values.update({key: value for key, value in args.items() if value is not None})
-        if args.get("region") and args["region"] != old_region:
+        if clear_focus:
+            values["location_focus"] = None
+        locality_changed = (
+            (args.get("region") and args["region"] != old_region)
+            or values.get("location_focus") != old_focus
+        )
+        if locality_changed:
             values["required_place_ids"] = []
             values["excluded_place_ids"] = []
         request = UserRequest.model_validate(values)
@@ -630,9 +782,13 @@ class SoulVietToolExecutor:
                 item for item in constraints.get(field, [])
                 if int(item.get("day", 0)) <= duration
             ]
-        if args.get("region") and args["region"] != old_region:
+        if locality_changed:
             constraints.pop("allowed_place_ids", None)
-        return self._ok("update_trip_settings", dumped, "Đã cập nhật working request"), {
+            constraints.pop("required_place_days", None)
+        data = dict(dumped)
+        if locality_resolution:
+            data["locality_resolution"] = locality_resolution
+        return self._ok("update_trip_settings", data, "Đã cập nhật working request"), {
             "working_request": dumped,
             "working_constraints": constraints,
             "dirty": True,
@@ -659,6 +815,10 @@ class SoulVietToolExecutor:
 
     def _tool_set_category_constraint(self, args, state):
         values = self._working_request(state)
+        args = dict(args)
+        explicitly_required = bool(args.pop("explicitly_required", False))
+        if args.get("mode") == "hard" and not explicitly_required:
+            args["mode"] = "soft"
         rule = CategoryConstraint.model_validate(args)
         rules = {
             item["category"].casefold(): item
@@ -776,6 +936,17 @@ class SoulVietToolExecutor:
             values["required_place_ids"] = required
         if policy.get("reorder_only"):
             constraints["allowed_place_ids"] = list(dict.fromkeys(current_ids))
+            constraints["reorder_baseline"] = {
+                "attraction_ids": list(current_ids),
+                "total_travel_time_minutes": sum(
+                    int(day.get("total_travel_time_minutes") or 0)
+                    for day in state.get("current_itinerary") or []
+                ),
+                "routing_sources": sorted({
+                    str(day.get("travel_time_source") or "unknown")
+                    for day in state.get("current_itinerary") or []
+                }),
+            }
         constraints["optimization_policy"] = policy
         dumped = UserRequest.model_validate(values).model_dump(mode="json")
         return self._ok(
@@ -1115,10 +1286,6 @@ class SoulVietToolExecutor:
             run("set_activity_preferences", args["activity_preferences"])
         for constraint in args.get("category_constraints", []):
             run("set_category_constraint", constraint)
-        if args.get("meal_preferences"):
-            run("set_meal_preferences", args["meal_preferences"])
-        for request in args.get("meal_requests", []):
-            run("set_meal_request", request)
         if args.get("optimization_policy"):
             run("set_optimization_policy", args["optimization_policy"])
         for place in args.get("add_places", []):
@@ -1182,17 +1349,39 @@ class SoulVietToolExecutor:
     def _tool_replan_itinerary(self, _args, state):
         request = UserRequest.model_validate(self._working_request(state))
         constraints = self._working_constraints(state)
+        # Meal planning is outside the current tourist-attractions-only MVP.
+        # Drop values persisted by older sessions so they cannot leak into a
+        # newly generated itinerary after the public tool schema changed.
+        constraints.pop("meal_preferences", None)
+        constraints.pop("meal_requests", None)
+        filtered = self.graph.filter_places(request)
+        attraction_candidate_count = sum(
+            self.itinerary._is_attraction(place)
+            and not self.itinerary._is_food_place(place)
+            for place in filtered
+        )
         itinerary = self.itinerary.build(
             request,
             candidate_ids=constraints.get("allowed_place_ids"),
-            meal_preferences=constraints.get("meal_preferences", []),
             required_place_days=constraints.get("required_place_days", {}),
-            meal_requests=constraints.get("meal_requests", []),
             scoped_exclusions=constraints.get("scoped_exclusions", []),
             day_policies=constraints.get("day_policies", []),
             optimization_policy=constraints.get("optimization_policy", {}),
         )
         report = self._validate_with_constraints(itinerary, request, constraints)
+        report["metrics"].update({
+            "preflight_attraction_candidates": attraction_candidate_count,
+            "preflight_required_nonempty_days": request.duration,
+        })
+        if attraction_candidate_count < request.duration:
+            report["quality_violations"] = sorted(set([
+                *report["quality_violations"],
+                "insufficient_candidates_for_days",
+            ]))
+            report["acceptable"] = False
+            report["status"] = (
+                "infeasible" if attraction_candidate_count == 0 else "partial"
+            )
         summary = self._summary(itinerary)
         summary["validation_status"] = report["status"]
         return self._ok("replan_itinerary", summary, "Đã lập và kiểm tra bản nháp"), {
@@ -1231,7 +1420,8 @@ class SoulVietToolExecutor:
             "current_itinerary": itinerary,
             "working_request": None,
             "working_itinerary": None,
-            "working_constraints": self._working_constraints(state),
+            "current_constraints": self._working_constraints(state),
+            "working_constraints": None,
             "dirty": False,
             "committed": True,
         }
@@ -1240,7 +1430,7 @@ class SoulVietToolExecutor:
         return self._ok("rollback_working_changes", {}, "Đã hủy thay đổi chưa commit"), {
             "working_request": None,
             "working_itinerary": None,
-            "working_constraints": {},
+            "working_constraints": None,
             "validation_report": None,
             "dirty": False,
             "committed": False,
@@ -1253,8 +1443,28 @@ class SoulVietToolExecutor:
             "Hãy hỏi đúng câu clarification này rồi kết thúc lượt",
         ), {}
 
+    def _tool_report_unsupported_request(self, args, state):
+        item = {
+            "capability": "meal_planning",
+            "request_summary": args["request_summary"],
+            "reason": "MVP hiện chỉ có dữ liệu điểm tham quan",
+            "applied": False,
+        }
+        existing = list(state.get("unsupported_requests") or [])
+        if not any(
+            value.get("capability") == item["capability"]
+            and value.get("request_summary") == item["request_summary"]
+            for value in existing
+        ):
+            existing.append(item)
+        return self._ok(
+            "report_unsupported_request",
+            item,
+            "Đã ghi nhận phần yêu cầu ăn uống chưa được hỗ trợ",
+        ), {"unsupported_requests": existing}
+
     def _validate_with_constraints(self, itinerary, request, constraints):
-        report = self.validator.validate(itinerary, request)
+        report = self.validator.validate(itinerary, request, self.graph)
         unmet = []
         for place_id, requested_day in constraints.get(
             "required_place_days", {}
@@ -1362,6 +1572,33 @@ class SoulVietToolExecutor:
         if unexpected_ids:
             report["quality_violations"].append("reorder_only_added_places")
         report["metrics"]["unexpected_place_ids"] = unexpected_ids
+
+        baseline = constraints.get("reorder_baseline")
+        if baseline and constraints.get("optimization_policy", {}).get("reorder_only"):
+            result_ids = [
+                item["id"]
+                for day in itinerary
+                for item in day.get("places", [])
+                if item.get("item_type", "attraction") != "meal"
+            ]
+            if sorted(result_ids) != sorted(baseline.get("attraction_ids", [])):
+                report["quality_violations"].append("reorder_only_changed_places")
+            result_minutes = sum(
+                int(day.get("total_travel_time_minutes") or 0)
+                for day in itinerary
+            )
+            baseline_minutes = int(baseline.get("total_travel_time_minutes") or 0)
+            comparable = all(
+                day.get("travel_time_source") not in {None, "haversine_fallback"}
+                for day in itinerary
+            ) and "haversine_fallback" not in baseline.get("routing_sources", [])
+            report["metrics"].update({
+                "reorder_baseline_travel_minutes": baseline_minutes,
+                "reorder_result_travel_minutes": result_minutes,
+                "reorder_travel_metric_comparable": comparable,
+            })
+            if comparable and result_minutes > baseline_minutes:
+                report["quality_violations"].append("reorder_only_route_regression")
 
         report["quality_violations"] = sorted(set(
             report["quality_violations"]

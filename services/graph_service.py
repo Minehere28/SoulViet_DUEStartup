@@ -5,6 +5,7 @@ import torch
 
 from services.scoring_service import ScoringService
 from utils.place_matching import place_categories, place_types
+from services.locality_service import ResolvedLocality
 
 
 class GraphService:
@@ -239,7 +240,20 @@ class GraphService:
             for value in getattr(user, "excluded_activity_categories", [])
             if str(value).strip()
         }
-        for place in self.nodes.values():
+        regional_places = [
+            place for place in self.nodes.values()
+            if place["region"] == user.region
+        ]
+        if user.location_focus:
+            locality = ResolvedLocality.resolve(
+                regional_places,
+                user.location_focus,
+                user.location_mode,
+                user.location_radius_km,
+                neighbor_lookup=self.get_neighbors,
+            )
+            regional_places = locality.filter(regional_places)
+        for place in regional_places:
             if place["id"] in excluded_ids:
                 continue
             current_types = place_types(place)
@@ -249,8 +263,6 @@ class GraphService:
             if excluded_categories & current_categories:
                 continue
             if place["rating"] < 4 and place["id"] not in required_ids:
-                continue
-            if place["region"] != user.region:
                 continue
             result.append(place)
         return result

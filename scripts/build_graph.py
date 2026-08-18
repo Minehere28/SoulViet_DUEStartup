@@ -1,5 +1,7 @@
 import argparse
 import json
+import re
+import struct
 from itertools import combinations
 from pathlib import Path
 
@@ -7,10 +9,12 @@ import pandas as pd
 import torch
 
 from utils.distance import haversine
+from utils.opening_hours import parse_operation_hours
+from utils.visit_duration import estimate_visit_duration
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = PROJECT_ROOT / "new_data_soulviet" / "new_data.csv"
+DEFAULT_INPUT = PROJECT_ROOT / "new_data_soulviet" / "data-tourist-attraction.csv"
 DEFAULT_OUTPUT = PROJECT_ROOT / "graph.pt"
 
 REQUIRED_COLUMNS = {
@@ -136,6 +140,166 @@ def clean_text(value):
     if pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def decode_wkb_point(hex_value):
+    raw_value = clean_text(hex_value)
+    if not raw_value:
+        return None, None
+    try:
+        raw = bytes.fromhex(raw_value)
+        if len(raw) < 16:
+            return None, None
+        lng, lat = struct.unpack("<dd", raw[-16:])
+        return float(lat), float(lng)
+    except (TypeError, ValueError, struct.error):
+        return None, None
+
+
+def parse_reference_price(value):
+    normalized = clean_text(value)
+    if not normalized or normalized.casefold() in {"0đ", "chưa phân loại"}:
+        return (0, 0)
+    amounts = [int(item.replace(".", "")) for item in re.findall(r"\d[\d.]*", normalized)]
+    if not amounts:
+        return (0, 0)
+    if normalized.casefold().startswith("từ"):
+        return (amounts[0], amounts[0])
+    if len(amounts) == 1:
+        return (amounts[0], amounts[0])
+    return (amounts[0], amounts[1])
+
+
+def normalize_json_list(value):
+    if pd.isna(value) or clean_text(value) == "":
+        return "[]"
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+        if not isinstance(parsed, list):
+            return "[]"
+        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "[]"
+
+
+def normalize_json_dict(value):
+    if pd.isna(value) or clean_text(value) == "":
+        return {}
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def extract_vibe(ai_context, vibe_value):
+    context = clean_text(ai_context)
+    match = re.search(r"Tag trải nghiệm:\s*(.*?)\.?\s*Ngân sách:", context)
+    if match:
+        return clean_text(match.group(1))
+
+    numeric_vibe = clean_text(vibe_value)
+    fallback = {
+        "1": "Chữa lành & Yên bình",
+        "2": "Năng động & Phiêu lưu",
+        "4": "Sáng tạo & Truyền cảm hứng",
+        "5": "Ẩm thực & Đặc sản",
+        "6": "Đậm văn hóa & Bản địa",
+    }
+    return fallback.get(numeric_vibe, clean_text(vibe_value))
+
+
+def normalize_dataframe(dataframe):
+    if REQUIRED_COLUMNS.issubset(set(dataframe.columns)):
+        return dataframe
+
+    if not {"Id", "Name", "Type", "Address", "Location", "Description", "OperationHours"}.issubset(set(dataframe.columns)):
+        return dataframe
+
+    normalized = dataframe.copy()
+    normalized["AllTypes"] = normalized["AllTypes"].map(normalize_json_list)
+    normalized["Activities"] = normalized["Activities"].map(normalize_json_list)
+    normalized["TopReviews"] = normalized["TopReviews"].map(normalize_json_list)
+
+    lat_lng = normalized["Location"].map(decode_wkb_point)
+    normalized["Lat"] = lat_lng.map(lambda pair: pair[0] if pair else None)
+    normalized["Lng"] = lat_lng.map(lambda pair: pair[1] if pair else None)
+
+    media = normalized["MediaInfo"].map(normalize_json_dict)
+    normalized["MainImage"] = media.map(lambda item: clean_text(item.get("MainImage")) if isinstance(item, dict) else "")
+    normalized["LandImages_JSON"] = media.map(
+        lambda item: json.dumps(item.get("LandImages") or [], ensure_ascii=False, separators=(",", ":"))
+        if isinstance(item, dict) else "[]"
+    )
+
+    opening_hours = normalized["OperationHours"].map(parse_operation_hours)
+    normalized["OpeningHours_JSON"] = opening_hours.map(
+        lambda item: json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    )
+    normalized["OpeningHoursStatus"] = opening_hours.map(lambda item: item["status"])
+    normalized["OpeningHoursNeedsReview"] = opening_hours.map(lambda item: item["needs_review"])
+    normalized["OpeningHoursVerificationStatus"] = opening_hours.map(
+        lambda item: "unknown" if item["status"] == "unknown" else (
+            "needs_review" if item["needs_review"] else "source_unverified"
+        )
+    )
+
+    visit_duration = [
+        estimate_visit_duration(primary_type, all_types)
+        for primary_type, all_types in zip(normalized["Type"], normalized["AllTypes"])
+    ]
+    normalized["VisitDurationMinutes"] = [item["minutes"] for item in visit_duration]
+    normalized["VisitDurationSource"] = [item["source"] for item in visit_duration]
+    normalized["VisitDurationConfidence"] = [item["confidence"] for item in visit_duration]
+
+    normalized["VibeTag"] = normalized.apply(
+        lambda row: extract_vibe(row.get("AiContext"), row.get("VibeTag")),
+        axis=1,
+    )
+
+    price_fields = [
+        "EntranceFeeMin", "EntranceFeeMax", "TypicalSpendMin", "TypicalSpendMax",
+        "PriceUnit", "PriceSource", "PriceVerifiedAt", "PriceConfidence",
+        "PriceVerificationStatus",
+    ]
+    for field in price_fields:
+        normalized[field] = ""
+
+    def update_price_fields(row):
+        parsed = parse_reference_price(row.get("ReferencePrice"))
+        price_type = clean_text(row.get("Type"))
+        if parsed != (0, 0):
+            entrance_fee_min, entrance_fee_max = parsed if price_type in {"museum", "historical_place", "tourist_attraction", "amusement_park"} else (0, 0)
+            spend_min, spend_max = parsed if price_type not in {"museum", "historical_place", "tourist_attraction", "amusement_park"} else (0, 0)
+            source = "reference_price"
+            confidence = "medium"
+        else:
+            entrance_fee_min = entrance_fee_max = 0
+            spend_min, spend_max = {"beach": (0, 0), "restaurant": (80_000, 250_000), "cafe": (35_000, 85_000), "tourist_attraction": (0, 150_000), "museum": (0, 0)}.get(price_type, (0, 0))
+            source = "type_estimate"
+            confidence = "low"
+
+        return {
+            "EntranceFeeMin": entrance_fee_min,
+            "EntranceFeeMax": entrance_fee_max,
+            "TypicalSpendMin": spend_min,
+            "TypicalSpendMax": spend_max,
+            "PriceUnit": "person",
+            "PriceSource": source,
+            "PriceVerifiedAt": "",
+            "PriceConfidence": confidence,
+            "PriceVerificationStatus": "estimated",
+        }
+
+    price_values = normalized.apply(update_price_fields, axis=1)
+    for field in price_fields:
+        normalized[field] = price_values.map(lambda item: item.get(field, ""))
+
+    return normalized
 
 
 def clean_float(value, default=0.0):
@@ -335,6 +499,7 @@ def create_near_edges(nodes, threshold_km):
 
 def build_graph(input_path, output_path, threshold_km=2.0):
     dataframe = pd.read_csv(input_path)
+    dataframe = normalize_dataframe(dataframe)
     validate_dataframe(dataframe)
 
     nodes = create_nodes(dataframe)
@@ -369,7 +534,7 @@ def build_graph(input_path, output_path, threshold_km=2.0):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build graph.pt directly from SoulViet new_data.csv"
+        description="Build graph.pt directly from SoulViet raw or cleaned CSV"
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
