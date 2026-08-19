@@ -587,9 +587,18 @@ class SoulVietAgentGraph:
                 tool_call_id=last.tool_call_id,
                 name=last.name,
             )
+        retryable_tool_error = bool(
+            batch_failed
+            and len(calls) == 1
+            and state.get("tool_retry_count", 0) < 1
+        )
+        if retryable_tool_error:
+            updates["tool_retry_count"] = state.get("tool_retry_count", 0) + 1
+            updates["outcome"] = None
+            updates["error"] = None
         auto_finalize = bool(model_called_names) and not all(
             name in self.READ_TOOLS for name in model_called_names
-        )
+        ) and not retryable_tool_error
         updates.update({
             "messages": observations,
             "tool_call_count": total_calls,
@@ -605,8 +614,16 @@ class SoulVietAgentGraph:
         request = state.get("current_request") or {}
         focus = request.get("location_focus") or request.get("region") or "điểm đến"
         itinerary = state.get("current_itinerary") or []
+        mutation = (state.get("current_constraints") or {}).get(
+            "mutation_invariants"
+        )
         lines = [
-            f"Mình đã tạo hành trình {len(itinerary)} ngày tại {focus}:"
+            (
+                f"Mình đã cập nhật hành trình {len(itinerary)} ngày tại {focus} "
+                "và giữ các địa điểm không liên quan đến thao tác:"
+            )
+            if mutation
+            else f"Mình đã tạo hành trình {len(itinerary)} ngày tại {focus}:"
         ]
         for index, day in enumerate(itinerary, start=1):
             names = [
@@ -783,6 +800,7 @@ class SoulVietAgentGraph:
                 "tool_call_count": 0,
                 "turn_tool_call_count": 0,
                 "required_tool_failures": 0,
+                "tool_retry_count": 0,
                 "repair_count": 0,
                 "repair_history": [],
                 "outcome": None,

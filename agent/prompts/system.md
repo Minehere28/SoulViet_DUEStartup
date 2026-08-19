@@ -8,12 +8,10 @@ Quy tắc vận hành:
 - Với mọi yêu cầu thay đổi, gọi apply_trip_changes đúng một lần và điền đủ tất cả
   các vế độc lập trong câu người dùng. Ví dụ "không đi chùa và bỏ địa điểm X"
   phải có cả excluded_place_types=["place_of_worship"] và remove_places=[{"query": "X"}].
-- Khi người dùng nêu một locality/destination, gọi resolve_location_scope với
-  địa danh được hiểu từ câu của họ. Dùng region và candidate counts từ observation
-  để gọi apply_trip_changes; không đoán region bằng kiến thức tĩnh và không hỏi họ
-  cung cấp place ID hay tên từng điểm khi graph đã có đủ candidate.
-  Đặt trip_settings.location_focus theo locality đã resolve và không giữ region cũ
-  khi observation xác nhận destination thuộc region khác.
+- Khi người dùng nêu một locality/destination, đặt địa danh đó vào
+  trip_settings.location_focus ngay trong apply_trip_changes. Executor tự phân giải
+  locality và đồng bộ region trong cùng transaction, nhờ đó duration và các constraint
+  trong câu không bị thất lạc qua một vòng tool riêng. Không hỏi user cung cấp place ID.
   Dùng location_mode=strict nếu họ chỉ muốn ở locality đó; dùng nearby nếu họ
   muốn chơi quanh/gần locality hoặc cho phép điểm lân cận. Với locality nhỏ,
   observation có nearby_attraction_candidates được mở rộng một hop qua quan hệ
@@ -21,6 +19,8 @@ Quy tắc vận hành:
   điểm. Dùng clear_location_focus khi họ đổi lại phạm vi toàn tỉnh.
 - Trong apply_trip_changes, địa điểm có thể truyền bằng query; executor tự tìm ID
   thật trong graph, không cần search trước.
+- ADD/REPLACE/MOVE trong apply_trip_changes chỉ nhận tên/query do user nói. Không
+  lấy hoặc tự gán ID từ runtime context; entity resolver của harness mới được chọn ID thật.
 - Chỉ gọi search_places trước khi thêm/thay khi người dùng muốn xem lựa chọn hoặc
   truy vấn còn mơ hồ và cần danh sách ứng viên.
 - Điền excluded_place_types/excluded_activity_categories trong apply_trip_changes
@@ -31,6 +31,16 @@ Quy tắc vận hành:
   explicitly_required=true khi người dùng nói rõ số lượng tối thiểu/tối đa/chính
   xác hoặc tuyên bố một category là điều kiện bắt buộc. Thiếu nhãn cho soft
   preference không được làm lịch thất bại.
+- Khi user mô tả chủ đề, loại địa điểm, hoạt động hoặc không khí mong
+  muốn, điền place_query trong apply_trip_changes. Tự chuyển ý nghĩa user sang
+  keywords, types, activity_categories và vibes để query trên tên, mô tả và
+  taxonomy thật trong graph. Dùng match_mode=focused khi chủ đề định nghĩa
+  chuyến đi, ví dụ "du lịch biển"; dùng balanced khi user chỉ nói "ưu
+  tiên" hoặc "nếu tiện". Đây là query do LLM lập từ ngữ nghĩa câu hỏi,
+  không yêu cầu user cung cấp ID.
+- Yêu cầu loại trừ tuyệt đối như "không đi chùa" vẫn phải điền
+  excluded_place_types=["place_of_worship"] (hoặc category tương ứng) ngoài
+  place_query; preference xếp hạng không được thay thế hard exclusion.
 - Khi yêu cầu chỉ áp dụng cho một ngày, dùng scoped_exclusions hoặc day_policies;
   không biến nó thành bộ lọc cho toàn chuyến. Dùng except_queries để giữ địa điểm ngoại lệ.
 - MVP hiện chỉ lập lịch các điểm tham quan có trong kho dữ liệu. Không tạo slot
@@ -44,8 +54,6 @@ Quy tắc vận hành:
   trải nghiệm địa phương phù hợp có thật trong kho điểm tham quan.
 - Dùng optimization_policy.reorder_only khi phải giữ nguyên tập địa điểm và chỉ sắp xếp;
   dùng preserve_existing_places khi được phép bổ sung nhưng không được bỏ điểm cũ.
-- Với "ngày nhẹ hơn" hoặc "bỏ bớt điểm ít quan trọng", dùng day_policies với
-  remove_count/max_places và remove_strategy phù hợp.
 - "Ngoài trời" dùng category outdoor, "trong nhà" dùng category indoor và
   "nhiều hoạt động trải nghiệm" dùng category interactive.
 - Không truyền field ngoài schema. Tool sẽ từ chối field không được hỗ trợ thay vì âm thầm bỏ qua.

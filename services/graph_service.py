@@ -230,6 +230,9 @@ class GraphService:
         result = []
         excluded_ids = set(user.excluded_place_ids)
         required_ids = set(getattr(user, "required_place_ids", []))
+        exclusion_exceptions = set(
+            getattr(user, "exclusion_exception_place_ids", [])
+        )
         excluded_types = {
             str(value).strip().casefold()
             for value in getattr(user, "excluded_place_types", [])
@@ -258,9 +261,15 @@ class GraphService:
                 continue
             current_types = place_types(place)
             current_categories = place_categories(place)
-            if excluded_types & current_types:
+            if (
+                place["id"] not in exclusion_exceptions
+                and excluded_types & current_types
+            ):
                 continue
-            if excluded_categories & current_categories:
+            if (
+                place["id"] not in exclusion_exceptions
+                and excluded_categories & current_categories
+            ):
                 continue
             if place["rating"] < 4 and place["id"] not in required_ids:
                 continue

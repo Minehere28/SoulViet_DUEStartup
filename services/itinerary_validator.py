@@ -31,6 +31,9 @@ class ItineraryValidator:
             value.strip().casefold()
             for value in user.excluded_activity_categories if value.strip()
         }
+        exclusion_exceptions = set(
+            getattr(user, "exclusion_exception_place_ids", [])
+        )
         requested_preference_groups = {
             value.strip().casefold()
             for value in user.preferred_activities
@@ -102,11 +105,17 @@ class ItineraryValidator:
                         supporting_count += 1
                     place_groups = place_categories(place)
                     current_place_types = place_types(place)
-                    if excluded_types & current_place_types:
+                    if (
+                        place_id not in exclusion_exceptions
+                        and excluded_types & current_place_types
+                    ):
                         hard_violations.append(
                             f"excluded_type_present:{place_id}"
                         )
-                    if excluded_categories & place_groups:
+                    if (
+                        place_id not in exclusion_exceptions
+                        and excluded_categories & place_groups
+                    ):
                         hard_violations.append(
                             f"excluded_category_present:{place_id}"
                         )

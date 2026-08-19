@@ -25,6 +25,7 @@ class SoulVietAgentState(TypedDict, total=False):
     error: dict | None
     turn_tool_call_count: int
     required_tool_failures: int
+    tool_retry_count: int
     repair_count: int
     repair_history: list[dict]
     outcome: str | None

@@ -566,24 +566,14 @@ class AssistantServiceTests(unittest.TestCase):
         self.assertEqual(len(itinerary), 5)
         self.assertTrue(all(day["places"] for day in itinerary))
 
-    def test_next_day_uses_previous_end_only_as_a_synthetic_start(self):
+    def test_each_day_resets_start_when_no_hotel_is_provided(self):
         itinerary = self.service.itinerary.build(self.request(
             duration=3,
             max_places_per_day=3,
         ))
 
-        for previous_day, current_day in zip(itinerary, itinerary[1:]):
-            previous_end = previous_day["places"][-1]
-            start = current_day["start_location"]
-            self.assertTrue(start["id"].startswith("__day_start__"))
-            self.assertEqual(
-                start["source_place_id"],
-                previous_end.get("routing_id", previous_end["id"]),
-            )
-            self.assertNotIn(
-                start["id"],
-                {place["id"] for place in current_day["places"]},
-            )
+        for day in itinerary:
+            self.assertIsNone(day["start_location"])
 
         attraction_ids = [
             place["id"]

@@ -118,16 +118,11 @@ class GraphQueryService:
             for value in [place.get("type", ""), *place.get("types", [])]
             if value
         }
-        requested_activities = {
-            normalize_text(value)
+        activity_hits = sum(
+            cls._matches_category(place, value)
             for value in query.activity_categories
             if value.strip()
-        }
-        place_activities = {
-            normalize_text(value)
-            for value in place.get("activity_categories", [])
-            if value
-        }
+        )
         requested_vibes = {
             normalize_text(value) for value in query.vibes if value.strip()
         }
@@ -139,8 +134,49 @@ class GraphQueryService:
         return (
             keyword_hits * 3
             + len(requested_types & place_types) * 2
-            + len(requested_activities & place_activities) * 2
+            + activity_hits * 2
             + len(requested_vibes & place_vibes) * 2
+        )
+
+    @classmethod
+    def _matches_focus(cls, place, query):
+        """Apply focused semantics without treating a loose text hit as a type hit."""
+        requested_types = {
+            normalize_text(value) for value in query.types if value.strip()
+        }
+        current_types = {
+            normalize_text(value)
+            for value in [
+                place.get("type", ""),
+                *place.get("types", []),
+                *place.get("all_types", []),
+            ]
+            if value
+        }
+        structured_match = bool(requested_types & current_types)
+        structured_match = structured_match or any(
+            cls._matches_category(place, value)
+            for value in query.activity_categories
+            if value.strip()
+        )
+        requested_vibes = {
+            normalize_text(value) for value in query.vibes if value.strip()
+        }
+        current_vibes = {
+            normalize_text(value)
+            for value in place.get("vibes", [])
+            if value
+        }
+        structured_match = structured_match or bool(
+            requested_vibes & current_vibes
+        )
+        has_structured_query = bool(
+            requested_types or query.activity_categories or requested_vibes
+        )
+        return (
+            structured_match
+            if has_structured_query
+            else cls._query_score(place, query) > 0
         )
 
     def search(self, user, query):
@@ -283,9 +319,16 @@ class GraphQueryService:
         )
         matching = [
             place for place in ranked
-            if self._query_score(place, query) > 0
+            if (
+                self._matches_focus(place, query)
+                if query.match_mode == "focused"
+                else self._query_score(place, query) > 0
+            )
         ]
-        seed_pool = matching if has_semantic_filters and matching else ranked
+        if has_semantic_filters and query.match_mode == "focused":
+            seed_pool = matching
+        else:
+            seed_pool = matching if has_semantic_filters and matching else ranked
         for place in seed_pool:
             if len(selected) >= seed_target:
                 break
@@ -310,6 +353,13 @@ class GraphQueryService:
                     same_region=True,
                     min_score=0.1,
                 ):
+                    if (
+                        query.match_mode == "focused"
+                        and not self._matches_focus(
+                            allowed.get(item["id"], {}), query
+                        )
+                    ):
+                        continue
                     add(
                         item["id"],
                         f"similar:{seed_id}",
@@ -328,6 +378,13 @@ class GraphQueryService:
                     key=lambda edge: edge.get("distance", 0),
                 )
                 for edge in neighbors:
+                    if (
+                        query.match_mode == "focused"
+                        and not self._matches_focus(
+                            allowed.get(edge["to"], {}), query
+                        )
+                    ):
+                        continue
                     add(
                         edge["to"],
                         f"near:{seed_id}",
@@ -339,19 +396,33 @@ class GraphQueryService:
                 if len(selected) >= query.candidate_limit:
                     break
 
-        for place in ranked:
+        # Complete the semantic pool before considering generic high-quality
+        # places. This makes LLM-authored themes effective without parsing the
+        # user's sentence with application-side keyword rules.
+        for place in matching:
             if len(selected) >= query.candidate_limit:
                 break
             add(
                 place["id"],
-                "ranked_fill",
+                "semantic_fill",
+                40,
                 enforce_preference_target=True,
             )
 
-        for place in ranked:
-            if len(selected) >= query.candidate_limit:
-                break
-            add(place["id"], "overflow_fill")
+        if query.match_mode == "balanced":
+            for place in ranked:
+                if len(selected) >= query.candidate_limit:
+                    break
+                add(
+                    place["id"],
+                    "ranked_fill",
+                    enforce_preference_target=True,
+                )
+
+            for place in ranked:
+                if len(selected) >= query.candidate_limit:
+                    break
+                add(place["id"], "overflow_fill")
 
         return {
             "candidate_ids": selected,

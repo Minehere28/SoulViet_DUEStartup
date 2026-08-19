@@ -47,6 +47,14 @@ class GraphQueryPlan(BaseModel):
     expand_near: bool = False
     near_hops: int = Field(default=0, ge=0, le=1)
     include_similar: bool = False
+    match_mode: Literal["balanced", "focused"] = Field(
+        default="balanced",
+        description=(
+            "Use focused when the requested theme defines the trip, so only "
+            "semantically matching candidates are eligible. Use balanced when "
+            "the theme is merely a preference and other good places may fill gaps."
+        ),
+    )
     candidate_limit: int = Field(default=20, ge=5, le=90)
 
     @model_validator(mode="before")

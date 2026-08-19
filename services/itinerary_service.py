@@ -148,13 +148,25 @@ class ItineraryService:
 
     def _assign_required_days(
         self, candidates, user, day_start_minutes, day_end_minutes,
-        additional_required_ids=None,
+        additional_required_ids=None, fixed_required_days=None,
     ):
         assignments = {index: set() for index in range(user.duration)}
         required_ids = set(user.required_place_ids)
         required_ids.update(additional_required_ids or [])
+        fixed_ids = set()
+        candidate_ids = {place["id"] for place in candidates}
+        for place_id, requested_day in (fixed_required_days or {}).items():
+            day_index = int(requested_day) - 1
+            if (
+                place_id in candidate_ids
+                and 0 <= day_index < user.duration
+            ):
+                assignments[day_index].add(place_id)
+                fixed_ids.add(place_id)
         required = [
-            place for place in candidates if place["id"] in required_ids
+            place
+            for place in candidates
+            if place["id"] in required_ids and place["id"] not in fixed_ids
         ]
         for place in required:
             feasible_days = []
@@ -1148,6 +1160,7 @@ class ItineraryService:
             day_start_minutes,
             day_end_minutes,
             quota_required_ids,
+            required_place_days,
         )
         for place_id, requested_day in (required_place_days or {}).items():
             day_index = int(requested_day) - 1
@@ -1157,7 +1170,6 @@ class ItineraryService:
                 assigned.discard(place_id)
             required_by_day[day_index].add(place_id)
         days = []
-        current_start = start_place
         day_policy_map = {
             int(item["day"]): item for item in (day_policies or [])
         }
@@ -1176,7 +1188,7 @@ class ItineraryService:
                     day_start_minutes,
                     day_end_minutes,
                     route_matrix,
-                    current_start,
+                    start_place,
                     meal_preferences,
                     required_by_day[day_index],
                     set().union(*(
@@ -1196,22 +1208,11 @@ class ItineraryService:
                 )
             )
             used_restaurants = set(days[-1].pop("_used_restaurant_ids"))
-            end_place = days[-1].pop("_end_place")
+            days[-1].pop("_end_place")
             restaurants[:] = [
                 place for place in restaurants
                 if place["id"] not in used_restaurants
             ]
-            if end_place:
-                source_place_id = self._routing_id(end_place)
-                current_start = {
-                    "id": f"__day_start__{day_index + 2}",
-                    "routing_id": source_place_id,
-                    "source_place_id": source_place_id,
-                    "name": end_place["name"],
-                    "lat": end_place["lat"],
-                    "lng": end_place["lng"],
-                    "visit_duration_minutes": 0,
-                }
         for day in days:
             day["estimated_spend_min"] = sum(
                 place["spend_min"] for place in day["places"]

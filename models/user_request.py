@@ -126,6 +126,14 @@ class UserRequest(BaseModel):
         max_length=20,
         description="Activity categories forbidden by the user.",
     )
+    exclusion_exception_place_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Explicitly requested place IDs allowed to override a broad type "
+            "or category exclusion while the exclusion remains active."
+        ),
+    )
     category_constraints: list[CategoryConstraint] = Field(
         default_factory=list,
         max_length=10,

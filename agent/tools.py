@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import date, time
 
 from langchain_core.tools import tool
@@ -14,6 +15,7 @@ from services.itinerary_validator import ItineraryValidator
 from services.locality_service import ResolvedLocality
 from models.assistant_intent import GraphQueryPlan
 from utils.place_matching import normalize_text, place_categories, place_types
+from utils.distance import haversine
 
 
 class EmptyInput(BaseModel):
@@ -43,6 +45,42 @@ class AddPlaceInput(BaseModel):
     def require_place_reference(self):
         if not self.place_id and not self.query:
             raise ValueError("Provide place_id or query")
+        return self
+
+
+class AddPlaceMutationInput(BaseModel):
+    """Public mutation reference: names are resolved by the harness, never by the LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=2, max_length=200)
+    day: int | None = Field(default=None, ge=1, le=14)
+    day_strategy: str = Field(default="auto", pattern="^(auto|most_free)$")
+
+
+class RemoveItemMutationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str | None = Field(default=None, min_length=2, max_length=200)
+    day: int | None = Field(default=None, ge=1, le=14)
+    position: int | None = Field(default=None, ge=0, le=20)
+    relative_position: str | None = Field(
+        default=None, pattern="^(first|last)$"
+    )
+    item_type: str = Field(default="attraction", pattern="^(attraction|meal|any)$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_position(cls, values):
+        if isinstance(values, dict) and values.get("position") == 0:
+            values["position"] = 1
+        return values
+
+    @model_validator(mode="after")
+    def require_reference(self):
+        if not self.query and (
+            self.day is None
+            or (self.position is None and self.relative_position is None)
+        ):
+            raise ValueError("Provide a query, or both day and position")
         return self
 
 
@@ -99,6 +137,13 @@ class UpdateTripInput(BaseModel):
     budget_level: BudgetLevel | None = None
     max_places_per_day: int | None = Field(default=None, ge=1, le=8)
     max_daily_distance_km: float | None = Field(default=None, gt=0, le=100)
+    max_daily_distance_is_hard: bool = Field(
+        default=False,
+        description=(
+            "True only when the user explicitly states a maximum travel "
+            "distance; false for application or model defaults."
+        ),
+    )
     start_date: date | None = None
     day_start_time: time | None = None
     day_end_time: time | None = None
@@ -108,6 +153,13 @@ class UpdateTripInput(BaseModel):
 
     @model_validator(mode="after")
     def require_change(self):
+        if (
+            self.max_daily_distance_is_hard
+            and self.max_daily_distance_km is None
+        ):
+            raise ValueError(
+                "A hard distance constraint requires max_daily_distance_km"
+            )
         if not self.model_dump(exclude_none=True, exclude_defaults=True):
             raise ValueError("At least one trip setting is required")
         return self
@@ -245,6 +297,22 @@ class ScopedExclusionInput(BaseModel):
         return self
 
 
+class ScopedExclusionMutationInput(BaseModel):
+    """Public scoped exclusion; exception names are resolved inside the graph."""
+
+    model_config = ConfigDict(extra="forbid")
+    day: int = Field(ge=1, le=14)
+    place_types: list[str] = Field(default_factory=list, max_length=20)
+    activity_categories: list[str] = Field(default_factory=list, max_length=20)
+    except_queries: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def require_filter(self):
+        if not self.place_types and not self.activity_categories:
+            raise ValueError("Provide a scoped place type or activity category")
+        return self
+
+
 class DayPolicyInput(BaseModel):
     """Deterministic editing and density policy for one itinerary day."""
 
@@ -286,6 +354,21 @@ class ReplacePlaceInput(BaseModel):
         return self
 
 
+class ReplacePlaceMutationInput(BaseModel):
+    """Public replacement reference; the model supplies names, not graph IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+    old_query: str = Field(min_length=2, max_length=200)
+    new_query: str = Field(min_length=2, max_length=200)
+    keep_same_day: bool = True
+
+
+class MovePlaceMutationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=2, max_length=200)
+    target_day: int = Field(ge=1, le=14)
+
+
 class ExclusionFiltersInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
     place_types: list[str] | None = Field(default_factory=list, max_length=20)
@@ -319,17 +402,34 @@ class ApplyTripChangesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trip_settings: UpdateTripInput | None = None
     activity_preferences: ActivitiesInput | None = None
+    place_query: GraphQueryPlan | None = Field(
+        default=None,
+        description=(
+            "LLM-authored semantic candidate query over real graph fields. "
+            "Use keywords, types, activity_categories and vibes to express what "
+            "the user wants; use match_mode=focused when that theme defines the trip."
+        ),
+    )
     category_constraints: list[CategoryConstraintInput] | None = Field(
         default_factory=list, max_length=10
     )
-    add_places: list[AddPlaceInput] | None = Field(default_factory=list, max_length=10)
-    remove_places: list[RemoveItemInput] | None = Field(default_factory=list, max_length=10)
-    replacements: list[ReplacePlaceInput] | None = Field(default_factory=list, max_length=10)
+    add_places: list[AddPlaceMutationInput] | None = Field(
+        default_factory=list, max_length=10
+    )
+    remove_places: list[RemoveItemMutationInput] | None = Field(
+        default_factory=list, max_length=10
+    )
+    replacements: list[ReplacePlaceMutationInput] | None = Field(
+        default_factory=list, max_length=10
+    )
+    move_places: list[MovePlaceMutationInput] | None = Field(
+        default_factory=list, max_length=10
+    )
     excluded_place_types: list[str] | None = Field(default_factory=list, max_length=20)
     excluded_activity_categories: list[str] | None = Field(
         default_factory=list, max_length=20
     )
-    scoped_exclusions: list[ScopedExclusionInput] | None = Field(
+    scoped_exclusions: list[ScopedExclusionMutationInput] | None = Field(
         default_factory=list, max_length=14
     )
     day_policies: list[DayPolicyInput] | None = Field(
@@ -358,7 +458,7 @@ class ApplyTripChangesInput(BaseModel):
                 }
             list_fields = [
                 "category_constraints", "add_places", "remove_places",
-                "replacements", "excluded_place_types", "excluded_activity_categories",
+                "replacements", "move_places", "excluded_place_types", "excluded_activity_categories",
                 "scoped_exclusions", "day_policies"
             ]
             for field in list_fields:
@@ -564,7 +664,6 @@ AGENT_TOOLS = [
     get_day_details,
     get_place_details,
     search_places,
-    resolve_location_scope,
     apply_trip_changes,
     ask_user_clarification,
     report_unsupported_request,
@@ -727,7 +826,11 @@ class SoulVietToolExecutor:
         values = self._working_request(state)
         old_region = values.get("region")
         old_focus = values.get("location_focus")
+        old_duration = int(values.get("duration", 1))
         clear_focus = bool(args.pop("clear_location_focus", False))
+        distance_is_hard = bool(
+            args.pop("max_daily_distance_is_hard", False)
+        )
         locality_resolution = None
         requested_focus = args.get("location_focus")
         if requested_focus and not clear_focus:
@@ -758,12 +861,21 @@ class SoulVietToolExecutor:
             (args.get("region") and args["region"] != old_region)
             or values.get("location_focus") != old_focus
         )
+        duration_changed = int(values.get("duration", old_duration)) != old_duration
         if locality_changed:
             values["required_place_ids"] = []
             values["excluded_place_ids"] = []
+            values["exclusion_exception_place_ids"] = []
         request = UserRequest.model_validate(values)
         dumped = request.model_dump(mode="json")
         constraints = self._working_constraints(state)
+        explicit_fields = set(constraints.get("explicit_request_fields", []))
+        if "max_daily_distance_km" in args:
+            if distance_is_hard:
+                explicit_fields.add("max_daily_distance_km")
+            else:
+                explicit_fields.discard("max_daily_distance_km")
+        constraints["explicit_request_fields"] = sorted(explicit_fields)
         duration = int(dumped["duration"])
         constraints["required_place_days"] = {
             place_id: day
@@ -783,8 +895,17 @@ class SoulVietToolExecutor:
                 if int(item.get("day", 0)) <= duration
             ]
         if locality_changed:
-            constraints.pop("allowed_place_ids", None)
-            constraints.pop("required_place_days", None)
+            for field in (
+                "allowed_place_ids", "candidate_priorities", "place_query",
+                "place_query_metrics", "required_place_days",
+                "mutation_invariants", "reorder_baseline",
+            ):
+                constraints.pop(field, None)
+            constraints["scoped_exclusions"] = []
+            constraints["day_policies"] = []
+        elif duration_changed:
+            constraints.pop("mutation_invariants", None)
+            constraints.pop("reorder_baseline", None)
         data = dict(dumped)
         if locality_resolution:
             data["locality_resolution"] = locality_resolution
@@ -900,15 +1021,34 @@ class SoulVietToolExecutor:
             )
         constraints = self._working_constraints(state)
         filters = list(constraints.get("scoped_exclusions", []))
-        filters.append({
+        new_filter = {
             "day": args["day"],
             "place_types": list(args.get("place_types", [])),
             "activity_categories": list(args.get("activity_categories", [])),
             "except_place_ids": sorted(exception_ids),
-        })
+        }
+
+        def filter_key(item):
+            return (
+                int(item["day"]),
+                frozenset(
+                    str(value).strip().casefold()
+                    for value in item.get("place_types", [])
+                ),
+                frozenset(
+                    str(value).strip().casefold()
+                    for value in item.get("activity_categories", [])
+                ),
+            )
+
+        new_key = filter_key(new_filter)
+        filters = [
+            item for item in filters if filter_key(item) != new_key
+        ]
+        filters.append(new_filter)
         constraints["scoped_exclusions"] = filters
         return self._ok(
-            "set_scoped_exclusion", filters[-1],
+            "set_scoped_exclusion", new_filter,
             f"Đã thêm bộ lọc riêng cho ngày {args['day']}",
         ), {
             "working_constraints": constraints,
@@ -977,10 +1117,13 @@ class SoulVietToolExecutor:
         removed_ids = []
         itinerary = state.get("current_itinerary") or []
         if remove_count and day_number <= len(itinerary):
+            explicitly_anchored = set(
+                constraints.get("required_place_days", {})
+            )
             items = [
                 item for item in itinerary[day_number - 1].get("places", [])
                 if item.get("item_type", "attraction") != "meal"
-                and item.get("id") not in set(values.get("required_place_ids", []))
+                and item.get("id") not in explicitly_anchored
             ]
             strategy = args.get("remove_strategy", "least_important")
             if strategy == "last":
@@ -1004,6 +1147,11 @@ class SoulVietToolExecutor:
             excluded = set(values.get("excluded_place_ids", []))
             excluded.update(removed_ids)
             values["excluded_place_ids"] = sorted(excluded)
+            values["required_place_ids"] = [
+                place_id
+                for place_id in values.get("required_place_ids", [])
+                if place_id not in set(removed_ids)
+            ]
         dumped = UserRequest.model_validate(values).model_dump(mode="json")
         return self._ok(
             "set_day_policy",
@@ -1023,24 +1171,51 @@ class SoulVietToolExecutor:
         values = self._working_request(state)
         required_ids = set(values.get("required_place_ids", []))
         excluded_ids = set(values.get("excluded_place_ids", []))
+        exception_ids = set(values.get("exclusion_exception_place_ids", []))
         if required:
             required_ids.add(place_id)
             excluded_ids.discard(place_id)
+            current_types = place_types(place)
+            current_categories = place_categories(place)
+            if (
+                current_types & {
+                    str(value).strip().casefold()
+                    for value in values.get("excluded_place_types", [])
+                }
+                or current_categories & {
+                    str(value).strip().casefold()
+                    for value in values.get(
+                        "excluded_activity_categories", []
+                    )
+                }
+            ):
+                exception_ids.add(place_id)
         else:
             excluded_ids.add(place_id)
             required_ids.discard(place_id)
+            exception_ids.discard(place_id)
         values.update({
             "required_place_ids": sorted(required_ids),
             "excluded_place_ids": sorted(excluded_ids),
+            "exclusion_exception_place_ids": sorted(exception_ids),
         })
         dumped = UserRequest.model_validate(values).model_dump(mode="json")
         return place, dumped
 
-    def _resolve_place_reference(self, state, place_id=None, query=None):
+    def _resolve_place_reference(
+        self, state, place_id=None, query=None, target_day=None,
+    ):
         if place_id:
             place = self.graph.get_place(place_id)
             if not place:
                 raise ValueError("Unknown place ID")
+            if query:
+                requested = normalize_text(query)
+                actual = normalize_text(place.get("name"))
+                if requested not in actual and actual not in requested:
+                    raise ValueError(
+                        "The supplied place ID does not match the requested name"
+                    )
             return place
         if not query:
             raise ValueError("A place ID or query is required")
@@ -1079,21 +1254,39 @@ class SoulVietToolExecutor:
                 ]
         if not matches:
             raise ValueError(f"No place matched query: {query}")
+        current_ids = {
+            item.get("id")
+            for day in state.get("current_itinerary") or []
+            for item in day.get("places", [])
+        }
+        target_places = []
+        if target_day is not None:
+            itinerary = state.get("current_itinerary") or []
+            if 1 <= int(target_day) <= len(itinerary):
+                target_places = itinerary[int(target_day) - 1].get("places", [])
+
+        def route_distance(place):
+            return min((
+                haversine(
+                    float(place.get("lat") or 0),
+                    float(place.get("lng") or 0),
+                    float(item.get("lat") or 0),
+                    float(item.get("lng") or 0),
+                )
+                for item in target_places
+                if item.get("lat") is not None and item.get("lng") is not None
+            ), default=float("inf"))
+
         matches.sort(key=lambda place: (
             -int(normalize_text(place.get("name")) == normalized),
+            -int(place.get("id") in current_ids),
+            route_distance(place),
             -float(place.get("rating") or 0),
             -int(place.get("review_count") or 0),
         ))
         return matches[0]
 
     def _tool_require_place(self, args, state):
-        place = self._resolve_place_reference(
-            state, args.get("place_id"), args.get("query")
-        )
-        place, dumped = self._change_place_constraint(state, place["id"], True)
-        updates = {
-            "working_request": dumped, "dirty": True, "committed": False,
-        }
         day = args.get("day")
         if day is None and args.get("day_strategy") == "most_free":
             itinerary = state.get("current_itinerary") or []
@@ -1112,12 +1305,27 @@ class SoulVietToolExecutor:
                         ),
                     ),
                 )
+        place = self._resolve_place_reference(
+            state,
+            args.get("place_id"),
+            args.get("query"),
+            target_day=day,
+        )
+        place, dumped = self._change_place_constraint(state, place["id"], True)
+        updates = {
+            "working_request": dumped, "dirty": True, "committed": False,
+        }
         constraints = self._working_constraints(state)
-        if constraints.get("optimization_policy", {}).get("reorder_only"):
+        if "allowed_place_ids" in constraints:
             allowed = list(constraints.get("allowed_place_ids", []))
             constraints["allowed_place_ids"] = list(dict.fromkeys([
                 *allowed, place["id"],
             ]))
+            priorities = dict(constraints.get("candidate_priorities", {}))
+            priorities[place["id"]] = max(
+                1000, int(priorities.get(place["id"], 0))
+            )
+            constraints["candidate_priorities"] = priorities
             updates["working_constraints"] = constraints
         if day is not None:
             if day > int(dumped["duration"]):
@@ -1194,11 +1402,25 @@ class SoulVietToolExecutor:
         _, values = self._change_place_constraint(state, old_place["id"], False)
         intermediate = {**state, "working_request": values}
         _, values = self._change_place_constraint(intermediate, new_place["id"], True)
-        updates = {"working_request": values, "dirty": True, "committed": False}
+        constraints = self._working_constraints(state)
+        if "allowed_place_ids" in constraints:
+            constraints["allowed_place_ids"] = list(dict.fromkeys([
+                *(
+                    place_id
+                    for place_id in constraints["allowed_place_ids"]
+                    if place_id != old_place["id"]
+                ),
+                new_place["id"],
+            ]))
+        updates = {
+            "working_request": values,
+            "working_constraints": constraints,
+            "dirty": True,
+            "committed": False,
+        }
         if args.get("keep_same_day", True):
             day = self._day_for_place(state, old_place["id"])
             if day:
-                constraints = self._working_constraints(state)
                 anchors = dict(constraints.get("required_place_days", {}))
                 anchors[new_place["id"]] = day
                 anchors.pop(old_place["id"], None)
@@ -1207,6 +1429,15 @@ class SoulVietToolExecutor:
         return self._ok("replace_itinerary_item", {
             "removed": old_place["name"], "required": new_place["name"],
         }, f"Đã chuẩn bị thay {old_place['name']} bằng {new_place['name']}"), updates
+
+    def _tool_move_place_reference(self, args, state):
+        place = self._resolve_place_reference(
+            state, query=args["query"], target_day=args["target_day"]
+        )
+        return self._tool_move_itinerary_item({
+            "place_id": place["id"],
+            "target_day": args["target_day"],
+        }, state)
 
     def _tool_set_exclusion_filters(self, args, state):
         values = self._working_request(state)
@@ -1228,6 +1459,27 @@ class SoulVietToolExecutor:
             "excluded_activity_categories",
             args.get("activity_categories", []),
         )
+        newly_excluded_types = {
+            str(value).strip().casefold()
+            for value in args.get("place_types", [])
+        }
+        newly_excluded_categories = {
+            str(value).strip().casefold()
+            for value in args.get("activity_categories", [])
+        }
+        values["exclusion_exception_place_ids"] = [
+            place_id
+            for place_id in values.get("exclusion_exception_place_ids", [])
+            if not (
+                self.graph.get_place(place_id)
+                and (
+                    newly_excluded_types
+                    & place_types(self.graph.get_place(place_id))
+                    or newly_excluded_categories
+                    & place_categories(self.graph.get_place(place_id))
+                )
+            )
+        ]
         dumped = UserRequest.model_validate(values).model_dump(mode="json")
         data = {
             "excluded_place_types": dumped["excluded_place_types"],
@@ -1263,10 +1515,178 @@ class SoulVietToolExecutor:
             "committed": False,
         }
 
+    def _enforce_mutation_semantics(self, args, original_state, state):
+        """Turn edit commands into explicit postconditions over the current plan."""
+        itinerary = original_state.get("current_itinerary") or []
+        if not itinerary:
+            return {}
+
+        original_request = original_state.get("current_request") or {}
+        values = self._working_request(state)
+        trip_shape_changed = any(
+            values.get(field) != original_request.get(field)
+            for field in ("duration", "region", "location_focus")
+        )
+        if trip_shape_changed:
+            return {}
+
+        item_patch = bool(
+            args.get("add_places")
+            or args.get("remove_places")
+            or args.get("replacements")
+            or args.get("move_places")
+        )
+        day_reduction = any(
+            int(policy.get("remove_count", 0)) > 0
+            for policy in args.get("day_policies", [])
+        )
+        policy = args.get("optimization_policy") or {}
+        exclusion_patch = bool(
+            args.get("excluded_place_types")
+            or args.get("excluded_activity_categories")
+            or args.get("scoped_exclusions")
+        )
+        preserve = bool(
+            item_patch
+            or day_reduction
+            or exclusion_patch
+            or policy.get("preserve_existing_places")
+            or policy.get("reorder_only")
+        )
+        if not preserve:
+            return {}
+
+        baseline_ids = []
+        original_days = {}
+        for day_number, day in enumerate(itinerary, start=1):
+            for item in day.get("places", []):
+                if item.get("item_type", "attraction") == "meal":
+                    continue
+                place_id = item.get("id")
+                if place_id and place_id not in original_days:
+                    baseline_ids.append(place_id)
+                    original_days[place_id] = day_number
+
+        request = UserRequest.model_validate(values)
+        globally_eligible = {
+            place["id"] for place in self.graph.filter_places(request)
+        }
+        constraints = self._working_constraints(state)
+        scoped_forbidden = set()
+        for scoped in constraints.get("scoped_exclusions", []):
+            day_number = int(scoped["day"])
+            exceptions = set(scoped.get("except_place_ids", []))
+            excluded_types = {
+                str(value).strip().casefold()
+                for value in scoped.get("place_types", [])
+            }
+            excluded_categories = {
+                str(value).strip().casefold()
+                for value in scoped.get("activity_categories", [])
+            }
+            for place_id, original_day in original_days.items():
+                if original_day != day_number or place_id in exceptions:
+                    continue
+                place = self.graph.get_place(place_id)
+                if place and (
+                    excluded_types & place_types(place)
+                    or excluded_categories & place_categories(place)
+                ):
+                    scoped_forbidden.add(place_id)
+
+        preserved_ids = [
+            place_id
+            for place_id in baseline_ids
+            if place_id in globally_eligible
+            and place_id not in scoped_forbidden
+        ]
+        added_ids = [
+            place_id
+            for place_id in values.get("required_place_ids", [])
+            if place_id not in baseline_ids
+            and place_id in globally_eligible
+        ]
+        required_ids = list(dict.fromkeys([*preserved_ids, *added_ids]))
+        values["required_place_ids"] = required_ids
+
+        exact_patch = bool(
+            item_patch
+            or day_reduction
+            or policy.get("reorder_only")
+        )
+        if exact_patch:
+            constraints["allowed_place_ids"] = list(required_ids)
+        elif "allowed_place_ids" in constraints:
+            constraints["allowed_place_ids"] = list(dict.fromkeys([
+                *preserved_ids,
+                *added_ids,
+                *(
+                    place_id
+                    for place_id in constraints.get("allowed_place_ids", [])
+                    if place_id in globally_eligible
+                    and place_id not in scoped_forbidden
+                ),
+            ]))
+
+        preserve_days = bool(
+            (args.get("remove_places") or args.get("replacements"))
+            and not args.get("add_places")
+        ) or day_reduction or bool(
+            policy.get("reorder_only")
+        ) or exclusion_patch
+        anchors = dict(constraints.get("required_place_days", {}))
+        if preserve_days:
+            baseline_anchors = {
+                place_id: original_days[place_id]
+                for place_id in preserved_ids
+            }
+            # Explicit ADD/REPLACE/MOVE anchors win over baseline day placement.
+            anchors = {**baseline_anchors, **anchors}
+        constraints["required_place_days"] = {
+            place_id: day
+            for place_id, day in anchors.items()
+            if place_id in required_ids
+        }
+
+        expected_absent = sorted(set(baseline_ids) - set(preserved_ids))
+        constraints["mutation_invariants"] = {
+            "baseline_ids": baseline_ids,
+            "preserved_ids": preserved_ids,
+            "added_ids": added_ids,
+            "expected_absent_ids": expected_absent,
+            "exact_result_ids": required_ids if exact_patch else [],
+            "original_days": original_days,
+            "preserve_days": preserve_days,
+        }
+        dumped = UserRequest.model_validate(values).model_dump(mode="json")
+        return {
+            "working_request": dumped,
+            "working_constraints": constraints,
+            "dirty": True,
+            "committed": False,
+        }
+
     def _tool_apply_trip_changes(self, args, state):
         local_state = dict(state)
         updates = {}
         applied = []
+
+        # Mutation invariants describe one transaction, not a permanent user
+        # preference. Clear them before interpreting the next command.
+        starting_constraints = self._working_constraints(local_state)
+        starting_constraints.pop("mutation_invariants", None)
+        starting_constraints.pop("reorder_baseline", None)
+        if not args.get("optimization_policy"):
+            previous_policy = dict(
+                starting_constraints.get("optimization_policy", {})
+            )
+            previous_policy.update({
+                "preserve_existing_places": False,
+                "reorder_only": False,
+            })
+            starting_constraints["optimization_policy"] = previous_policy
+        local_state["working_constraints"] = starting_constraints
+        updates["working_constraints"] = starting_constraints
 
         def run(tool_name, tool_args):
             observation, tool_updates = self.execute(
@@ -1288,12 +1708,6 @@ class SoulVietToolExecutor:
             run("set_category_constraint", constraint)
         if args.get("optimization_policy"):
             run("set_optimization_policy", args["optimization_policy"])
-        for place in args.get("add_places", []):
-            run("require_place", place)
-        for place in args.get("remove_places", []):
-            run("remove_itinerary_item", place)
-        for replacement in args.get("replacements", []):
-            run("replace_itinerary_item", replacement)
         excluded_types = args.get("excluded_place_types", [])
         excluded_categories = args.get("excluded_activity_categories", [])
         if excluded_types or excluded_categories:
@@ -1304,10 +1718,63 @@ class SoulVietToolExecutor:
             })
         for scoped_filter in args.get("scoped_exclusions", []):
             run("set_scoped_exclusion", scoped_filter)
+        for place in args.get("add_places", []):
+            run("require_place", place)
+        for place in args.get("remove_places", []):
+            run("remove_itinerary_item", place)
+        for replacement in args.get("replacements", []):
+            run("replace_itinerary_item", replacement)
+        for move in args.get("move_places", []):
+            run("move_place_reference", move)
         for policy in args.get("day_policies", []):
             run("set_day_policy", policy)
         if args.get("quality_policies"):
             run("apply_quality_policies", args["quality_policies"])
+        if args.get("place_query"):
+            request = UserRequest.model_validate(
+                self._working_request(local_state)
+            )
+            plan = GraphQueryPlan.model_validate(args["place_query"])
+            result = self.query.search(request, plan)
+            constraints = self._working_constraints(local_state)
+            constraints.update({
+                "allowed_place_ids": result["candidate_ids"],
+                "candidate_priorities": result["priorities"],
+                "place_query": plan.model_dump(mode="json"),
+                "place_query_metrics": {
+                    "candidate_count": result["candidate_count"],
+                    "semantic_match_count": result["semantic_match_count"],
+                    "match_mode": plan.match_mode,
+                },
+            })
+            query_update = {
+                "working_constraints": constraints,
+                "dirty": True,
+                "committed": False,
+            }
+            local_state.update(query_update)
+            updates.update(query_update)
+            applied.append({
+                "tool": "query_place_candidates",
+                "summary": (
+                    f"Đã chọn {result['candidate_count']} ứng viên từ graph "
+                    f"({result['semantic_match_count']} khớp ngữ nghĩa)"
+                ),
+                "data": result,
+            })
+        mutation_updates = self._enforce_mutation_semantics(
+            args, state, local_state
+        )
+        if mutation_updates:
+            local_state.update(mutation_updates)
+            updates.update(mutation_updates)
+            applied.append({
+                "tool": "enforce_mutation_invariants",
+                "summary": "Đã khóa các địa điểm không liên quan đến thao tác sửa",
+                "data": mutation_updates["working_constraints"].get(
+                    "mutation_invariants", {}
+                ),
+            })
         return self._ok(
             "apply_trip_changes",
             {"applied": applied, "count": len(applied)},
@@ -1354,6 +1821,41 @@ class SoulVietToolExecutor:
         # newly generated itinerary after the public tool schema changed.
         constraints.pop("meal_preferences", None)
         constraints.pop("meal_requests", None)
+        if (
+            constraints.get("required_place_days")
+            and "max_daily_distance_km"
+            not in set(constraints.get("explicit_request_fields", []))
+        ):
+            required_by_day = {}
+            for place_id, day in constraints["required_place_days"].items():
+                place = self.graph.get_place(place_id)
+                if place:
+                    required_by_day.setdefault(int(day), []).append(place)
+            required_span = max((
+                haversine(
+                    first["lat"], first["lng"], second["lat"], second["lng"]
+                )
+                for places in required_by_day.values()
+                for index, first in enumerate(places)
+                for second in places[index + 1:]
+            ), default=0.0)
+            effective_distance = min(
+                100.0,
+                max(
+                    float(request.max_daily_distance_km),
+                    # Road routes around mountains/coast can be materially
+                    # longer than straight-line distance.
+                    math.ceil(required_span * 2.0),
+                ),
+            )
+            if effective_distance > request.max_daily_distance_km:
+                values = request.model_dump(mode="json")
+                values["max_daily_distance_km"] = effective_distance
+                request = UserRequest.model_validate(values)
+                constraints["operational_adjustments"] = {
+                    "max_daily_distance_km": effective_distance,
+                    "reason": "explicit_place_day_anchor",
+                }
         filtered = self.graph.filter_places(request)
         attraction_candidate_count = sum(
             self.itinerary._is_attraction(place)
@@ -1363,6 +1865,7 @@ class SoulVietToolExecutor:
         itinerary = self.itinerary.build(
             request,
             candidate_ids=constraints.get("allowed_place_ids"),
+            candidate_priorities=constraints.get("candidate_priorities"),
             required_place_days=constraints.get("required_place_days", {}),
             scoped_exclusions=constraints.get("scoped_exclusions", []),
             day_policies=constraints.get("day_policies", []),
@@ -1599,6 +2102,39 @@ class SoulVietToolExecutor:
             })
             if comparable and result_minutes > baseline_minutes:
                 report["quality_violations"].append("reorder_only_route_regression")
+
+        invariants = constraints.get("mutation_invariants") or {}
+        result_ids = {
+            item["id"]
+            for day in itinerary
+            for item in day.get("places", [])
+            if item.get("item_type", "attraction") != "meal"
+        }
+        missing_preserved = sorted(
+            set(invariants.get("preserved_ids", [])) - result_ids
+        )
+        unexpectedly_present = sorted(
+            set(invariants.get("expected_absent_ids", [])) & result_ids
+        )
+        exact_ids = set(invariants.get("exact_result_ids", []))
+        exact_mismatch = bool(exact_ids and result_ids != exact_ids)
+        if missing_preserved:
+            report["quality_violations"].append(
+                "mutation_preservation_unmet"
+            )
+        if unexpectedly_present:
+            report["quality_violations"].append(
+                "mutation_removal_unmet"
+            )
+        if exact_mismatch:
+            report["quality_violations"].append(
+                "mutation_exact_set_unmet"
+            )
+        report["metrics"]["mutation_invariants"] = {
+            "missing_preserved_ids": missing_preserved,
+            "unexpectedly_present_ids": unexpectedly_present,
+            "exact_set_mismatch": exact_mismatch,
+        }
 
         report["quality_violations"] = sorted(set(
             report["quality_violations"]

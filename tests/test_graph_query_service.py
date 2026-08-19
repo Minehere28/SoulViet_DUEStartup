@@ -95,6 +95,20 @@ class GraphQueryServiceTests(unittest.TestCase):
         self.assertEqual(result["candidate_count"], 7)
         self.assertEqual(result["near_hops"], 1)
 
+    def test_focused_query_does_not_fall_back_to_unrelated_places(self):
+        service = GraphQueryService(FakeGraph(), FakeSimilarity())
+        query = GraphQueryPlan(
+            types=["beach"],
+            activity_categories=["beach"],
+            match_mode="focused",
+            candidate_limit=7,
+        )
+
+        result = service.search(object(), query)
+
+        self.assertEqual(result["candidate_ids"], [])
+        self.assertEqual(result["semantic_match_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

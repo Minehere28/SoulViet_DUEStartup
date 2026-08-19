@@ -8,7 +8,7 @@ from agent.memory import AgentMemory
 from agent.tools import ApplyTripChangesInput, SoulVietToolExecutor
 from models.user_request import RegionName, UserRequest, VibeName
 from services.itinerary_service import ItineraryService
-from utils.place_matching import normalize_text
+from utils.place_matching import normalize_text, place_types
 
 
 class StableRouting:
@@ -122,6 +122,264 @@ def test_hoi_an_preflight_has_enough_candidates_for_two_days(tmp_path):
     assert report["metrics"]["preflight_attraction_candidates"] >= 2
     assert "empty_days" not in report["quality_violations"]
     assert all(day["places"] for day in replanned["working_itinerary"])
+
+
+def test_focused_beach_query_drives_real_graph_candidates_and_itinerary(tmp_path):
+    itinerary = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary,
+        memory=AgentMemory(tmp_path),
+    )
+    state = {
+        "current_request": request_data(
+            region="Đà Nẵng", duration=2, max_places_per_day=3
+        ),
+        "current_itinerary": [],
+    }
+    payload = {
+        "place_query": {
+            "keywords": ["biển", "bãi biển", "tắm biển"],
+            "types": ["beach"],
+            "activity_categories": ["beach"],
+            "match_mode": "focused",
+            "candidate_limit": 30,
+        }
+    }
+
+    _, changed = executor.execute("apply_trip_changes", payload, state)
+    state.update(changed)
+    allowed_ids = state["working_constraints"]["allowed_place_ids"]
+    assert len(allowed_ids) >= 2
+    assert all(
+        "place_of_worship" not in place_types(executor.graph.get_place(place_id))
+        for place_id in allowed_ids
+    )
+
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+    assert all(day["places"] for day in replanned["working_itinerary"])
+    assert all(
+        "place_of_worship" not in place_types(place)
+        for day in replanned["working_itinerary"]
+        for place in day["places"]
+    )
+
+
+def test_place_query_respects_explicit_worship_exclusion(tmp_path):
+    executor = SoulVietToolExecutor(memory=AgentMemory(tmp_path))
+    state = {
+        "current_request": request_data(region="Đà Nẵng"),
+        "current_itinerary": [],
+    }
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "excluded_place_types": ["place_of_worship"],
+        "place_query": {
+            "keywords": ["nổi tiếng"],
+            "match_mode": "balanced",
+            "candidate_limit": 30,
+        },
+    }, state)
+
+    allowed_ids = changed["working_constraints"]["allowed_place_ids"]
+    assert allowed_ids
+    assert all(
+        "place_of_worship" not in place_types(executor.graph.get_place(place_id))
+        for place_id in allowed_ids
+    )
+
+
+def test_remove_mutation_preserves_every_unaffected_place_and_day(tmp_path):
+    itinerary_service = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary_service, memory=AgentMemory(tmp_path)
+    )
+    request = request_data(duration=2, max_places_per_day=3)
+    current = itinerary_service.build(UserRequest.model_validate(request))
+    removed_id = current[0]["places"][0]["id"]
+    original_days = {
+        item["id"]: day_number
+        for day_number, day in enumerate(current, start=1)
+        for item in day["places"]
+    }
+    state = {"current_request": request, "current_itinerary": current}
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "remove_places": [{"day": 1, "position": 1}],
+    }, state)
+    state.update(changed)
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    result_days = {
+        item["id"]: day_number
+        for day_number, day in enumerate(
+            replanned["working_itinerary"], start=1
+        )
+        for item in day["places"]
+    }
+    assert set(result_days) == set(original_days) - {removed_id}
+    assert all(
+        result_days[place_id] == original_days[place_id]
+        for place_id in result_days
+    )
+    assert replanned["validation_report"]["acceptable"] is True
+
+
+def test_add_mutation_keeps_current_set_and_places_new_entity_on_target_day(tmp_path):
+    itinerary_service = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary_service, memory=AgentMemory(tmp_path)
+    )
+    small_request = UserRequest.model_validate(
+        request_data(duration=2, max_places_per_day=2)
+    )
+    current = itinerary_service.build(small_request)
+    request = request_data(duration=2, max_places_per_day=3)
+    state = {"current_request": request, "current_itinerary": current}
+    baseline_ids = {
+        item["id"] for day in current for item in day["places"]
+    }
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "add_places": [{"query": "Bà Nà Hills", "day": 2}],
+    }, state)
+    state.update(changed)
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    target_id = next(
+        place_id
+        for place_id in replanned["working_request"]["required_place_ids"]
+        if place_id not in baseline_ids
+    )
+    result_ids = {
+        item["id"]
+        for day in replanned["working_itinerary"]
+        for item in day["places"]
+    }
+    assert result_ids == baseline_ids | {target_id}
+    assert any(
+        item["id"] == target_id
+        for item in replanned["working_itinerary"][1]["places"]
+    )
+    assert replanned["validation_report"]["acceptable"] is True
+
+
+def test_public_add_mutation_rejects_model_selected_place_id():
+    with pytest.raises(ValidationError):
+        ApplyTripChangesInput.model_validate({
+            "add_places": [{
+                "place_id": "1ddbcea2-c38d-594b-9ced-5208ee38e11f",
+                "day": 2,
+            }]
+        })
+
+
+def test_move_mutation_preserves_set_and_only_changes_requested_day(tmp_path):
+    itinerary_service = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary_service, memory=AgentMemory(tmp_path)
+    )
+    request = request_data(duration=2, max_places_per_day=3)
+    current = itinerary_service.build(UserRequest.model_validate(request))
+    target = current[0]["places"][0]
+    baseline_ids = {
+        item["id"] for day in current for item in day["places"]
+    }
+    state = {"current_request": request, "current_itinerary": current}
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "move_places": [{"query": target["name"], "target_day": 2}],
+    }, state)
+    state.update(changed)
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    result_ids = {
+        item["id"]
+        for day in replanned["working_itinerary"]
+        for item in day["places"]
+    }
+    assert result_ids == baseline_ids
+    assert any(
+        item["id"] == target["id"]
+        for item in replanned["working_itinerary"][1]["places"]
+    )
+    assert replanned["validation_report"]["acceptable"] is True
+
+
+def test_reorder_only_keeps_exact_current_place_set(tmp_path):
+    itinerary_service = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary_service, memory=AgentMemory(tmp_path)
+    )
+    request = request_data(duration=2, max_places_per_day=3)
+    current = itinerary_service.build(UserRequest.model_validate(request))
+    baseline_ids = {
+        item["id"] for day in current for item in day["places"]
+    }
+    state = {"current_request": request, "current_itinerary": current}
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "optimization_policy": {
+            "preserve_existing_places": True,
+            "reorder_only": True,
+            "minimize_travel": True,
+            "fill_idle_gaps": False,
+        },
+    }, state)
+    state.update(changed)
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    result_ids = {
+        item["id"]
+        for day in replanned["working_itinerary"]
+        for item in day["places"]
+    }
+    assert result_ids == baseline_ids
+    assert "reorder_only_changed_places" not in replanned[
+        "validation_report"
+    ]["quality_violations"]
+
+
+def test_explicit_named_place_can_override_broad_exclusion_only_for_itself(tmp_path):
+    itinerary_service = ItineraryService(routing=StableRouting())
+    executor = SoulVietToolExecutor(
+        itinerary=itinerary_service, memory=AgentMemory(tmp_path)
+    )
+    small_request = UserRequest.model_validate(request_data(
+        duration=2,
+        max_places_per_day=2,
+        excluded_place_types=["place_of_worship"],
+    ))
+    current = itinerary_service.build(small_request)
+    request = request_data(
+        duration=2,
+        max_places_per_day=3,
+        excluded_place_types=["place_of_worship"],
+    )
+    state = {"current_request": request, "current_itinerary": current}
+
+    _, changed = executor.execute("apply_trip_changes", {
+        "add_places": [{"query": "Chùa Linh Ứng", "day": 2}],
+        "scoped_exclusions": [{
+            "day": 2,
+            "place_types": ["place_of_worship"],
+            "except_queries": ["Chùa Linh Ứng"],
+        }],
+    }, state)
+    state.update(changed)
+    _, replanned = executor.execute("replan_itinerary", {}, state)
+
+    exceptions = set(
+        replanned["working_request"]["exclusion_exception_place_ids"]
+    )
+    worship_ids = {
+        item["id"]
+        for day in replanned["working_itinerary"]
+        for item in day["places"]
+        if "place_of_worship" in place_types(item)
+    }
+    assert len(exceptions) == 1
+    assert worship_ids == exceptions
+    assert replanned["validation_report"]["acceptable"] is True
 
 
 def test_planner_does_not_add_default_lunch_or_dinner(tmp_path):
@@ -402,6 +660,14 @@ def test_day_scoped_spiritual_filter_keeps_explicit_exception(tmp_path):
     state = {
         "current_request": request_data(duration=2, max_places_per_day=3),
         "current_itinerary": [],
+        "current_constraints": {
+            "scoped_exclusions": [{
+                "day": 2,
+                "place_types": ["place_of_worship"],
+                "activity_categories": [],
+                "except_place_ids": [],
+            }],
+        },
     }
     _, updates = executor.execute("apply_trip_changes", {
         "add_places": [{"query": "Chùa Linh Ứng", "day": 2}],
@@ -417,6 +683,7 @@ def test_day_scoped_spiritual_filter_keeps_explicit_exception(tmp_path):
     exception_id = replanned["working_constraints"]["scoped_exclusions"][0][
         "except_place_ids"
     ][0]
+    assert len(replanned["working_constraints"]["scoped_exclusions"]) == 1
     worship_ids = {
         item["id"]
         for item in replanned["working_itinerary"][1]["places"]
